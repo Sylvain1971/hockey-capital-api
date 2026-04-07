@@ -18,7 +18,7 @@ app.use(express.json());
 // ---- ROUTES ----
 app.use('/api/auth',     require('./api/routes/auth'));
 app.use('/api/market',   require('./api/routes/market'));
-app.use('/api/orders',   require('./api/routes/orders'));
+app.use('/api/orders',   require('./api/routes/orders').ordersRouter);
 app.use('/api/portfolio',require('./api/routes/portfolio'));
 app.use('/api/leagues', require('./api/routes/leagues'));
 app.use('/api/admin',    require('./api/routes/admin'));
