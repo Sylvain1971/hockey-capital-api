@@ -1,0 +1,26 @@
+{
+  "name": "hockey-capital-api",
+  "version": "1.0.0",
+  "description": "Hockey Capital — Bourse sportive LNH (backend Supabase)",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test": "node -e \"require('./src/services/priceImpact'); console.log('OK')\"",
+    "db:migrate": "supabase db push",
+    "db:reset": "supabase db reset"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
