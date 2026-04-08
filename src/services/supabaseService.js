@@ -202,7 +202,6 @@ async function executeTrade({ userId, teamId, side, price, qty, orderId = null }
     .order('recorded_at', { ascending: false })
     .limit(1);
 
-  await supabase.rpc('update_badge', { p_user_id: userId });
   return { success: true, price, qty, total: cost };
 }
 
@@ -231,7 +230,7 @@ async function upsertHolding(userId, teamId, deltaShares, tradePrice) {
 // ---- PORTFOLIO ----
 
 async function getPortfolio(userId) {
-  const { data: profile } = await supabase.from('profiles').select('*').eq('id', userId).single();
+  const { data: profile } = await supabase.from('profiles').select('cash').eq('id', userId).single();
   const { data: holdings } = await supabase.from('holdings').select('*, teams(name, color, division)').eq('user_id', userId).gt('shares', 0);
   const prices = await getAllPrices();
   const priceMap = Object.fromEntries(prices.map(p => [p.team_id, parseFloat(p.price)]));
@@ -252,7 +251,6 @@ async function getPortfolio(userId) {
     stockValue,
     totalValue: parseFloat(profile.cash) + stockValue,
     pnl: stockValue - costBasis,
-    badge: profile.badge,
     positions,
   };
 }
