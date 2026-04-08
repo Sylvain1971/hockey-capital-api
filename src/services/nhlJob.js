@@ -10,7 +10,7 @@ const { applyGameResult, applyStandingsAdjustment, applyPlayoffClinch } = requir
 const {
   getCurrentPrice, updatePrice, logPriceImpact,
   getNHLStats, updateNHLStats, markClinchBonusPaid,
-  payDividend,
+  payDividend, supabase,
 } = require('./supabaseService');
 
 const processedGames = new Set(); // éviter de traiter le même match deux fois
@@ -66,9 +66,12 @@ async function processTeamGameResult(result, gameId, broadcast) {
       currentPrice
     );
 
-    // Sauvegarder le nouveau prix
+    // Sauvegarder le nouveau prix global
     await updatePrice(teamId, impact.newPrice);
     await logPriceImpact(teamId, impact.log.trigger, impact.log.description, currentPrice, impact.newPrice);
+
+    // Propager le prix dans toutes les ligues actives
+    await propagatePriceToLeagues(teamId, impact.newPrice, impact.pctChange);
 
     // Mettre à jour les stats LNH
     const statUpdate = {
@@ -144,6 +147,7 @@ async function processStandings(broadcast = null) {
       if (adj.pctChange !== 0) {
         await updatePrice(team.teamId, adj.newPrice);
         await logPriceImpact(team.teamId, adj.log.trigger, adj.log.description, currentPrice, adj.newPrice);
+        await propagatePriceToLeagues(team.teamId, adj.newPrice, adj.pctChange);
       }
 
       // Mise à jour des stats standings
@@ -179,6 +183,41 @@ async function processStandings(broadcast = null) {
     } catch (err) {
       console.error(`[STANDINGS] Erreur ${team.teamId}:`, err.message);
     }
+  }
+}
+
+/**
+ * Propage un nouveau prix dans toutes les ligues actives
+ * Insère aussi dans price_impact_log de chaque ligue
+ */
+async function propagatePriceToLeagues(teamId, newPrice, pctChange) {
+  try {
+    const { data: leagues } = await supabase
+      .from('leagues')
+      .select('id')
+      .eq('status', 'open');
+
+    if (!leagues || leagues.length === 0) return;
+
+    for (const league of leagues) {
+      await supabase
+        .from('league_team_prices')
+        .update({ price: newPrice })
+        .eq('league_id', league.id)
+        .eq('team_id', teamId);
+
+      // Log dans l'impact log de la ligue
+      if (pctChange !== 0) {
+        await supabase.from('league_price_impacts').insert({
+          league_id: league.id,
+          team_id: teamId,
+          pct_change: pctChange,
+          description: `Impact LNH: ${pctChange >= 0 ? '+' : ''}${pctChange.toFixed(3)}%`,
+        }).select();
+      }
+    }
+  } catch (e) {
+    console.error('[LEAGUES] Erreur propagation prix:', e.message);
   }
 }
 

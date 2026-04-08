@@ -14,22 +14,21 @@ router.get('/teams', async (req, res) => {
     const { data: stats }  = await supabase.from('nhl_team_stats').select('*');
     const prices = await getAllPrices();
 
-    // Prix précédent (avant-dernier enregistrement) pour calculer la variation vs veille
+    // Prix de la veille: on prend le premier enregistrement d'avant minuit aujourd'hui
+    const todayMidnight = new Date();
+    todayMidnight.setHours(0, 0, 0, 0);
     const { data: prevPrices } = await supabase
       .from('team_prices')
       .select('team_id, price, recorded_at')
+      .lt('recorded_at', todayMidnight.toISOString())
       .order('recorded_at', { ascending: false })
-      .limit(64); // 2 entrées par équipe max
+      .limit(64); // dernier prix avant minuit par equipe
 
-    // Construire map prix précédent: on prend la 2e occurrence par équipe
+    // Construire map prix précédent: dernier prix avant aujourd'hui
     const prevMap = {};
-    const seenTeams = {};
     for (const p of prevPrices || []) {
-      if (!seenTeams[p.team_id]) {
-        seenTeams[p.team_id] = 1; // 1ère = prix actuel, ignorer
-      } else if (seenTeams[p.team_id] === 1) {
-        prevMap[p.team_id] = parseFloat(p.price); // 2ème = prix veille
-        seenTeams[p.team_id] = 2;
+      if (!prevMap[p.team_id]) {
+        prevMap[p.team_id] = parseFloat(p.price);
       }
     }
 
