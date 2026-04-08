@@ -46,10 +46,20 @@ router.post('/', requireAuth, async (req, res) => {
 
   if (error) return res.status(500).json({ error: error.message });
 
-  // Inscrire le créateur
+  // Inscrire le créateur comme membre
   await supabase.from('league_members').insert({
     league_id: league.id, user_id: req.user.id, cash: capital, is_creator: true,
   });
+
+  // Sauvegarder les invitations email
+  const inviteEmails = req.body.inviteEmails || [];
+  if (inviteEmails.length > 0) {
+    const invites = inviteEmails.map(e => ({
+      league_id: league.id,
+      email: e.toLowerCase().trim(),
+    }));
+    await supabase.from('league_invitations').upsert(invites, { onConflict: 'league_id,email' });
+  }
 
   // Initialiser les prix AMM pour cette ligue
   const { data: teams } = await supabase.from('teams').select('id');
