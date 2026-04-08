@@ -205,7 +205,7 @@ router.post('/:id/market/buy', requireAuth, async (req, res) => {
   if (!member) return res.status(403).json({ error: 'Pas membre de cette ligue' });
 
   const { data: lp } = await supabase.from('league_team_prices').select('price, amm_reserve, amm_spread_pct').eq('league_id', leagueId).eq('team_id', teamId).single();
-  const { data: league } = await supabase.from('leagues').select('amm_spread_pct, algo_config').eq('id', leagueId).single();
+  const { data: league } = await supabase.from('leagues').select('amm_spread_pct, algo_config, capital_virtuel').eq('id', leagueId).single();
 
   const spread = ((lp?.amm_spread_pct || league?.amm_spread_pct || 2)) / 100;
   const refPrice = lp?.price || EMISSION_PRICE;
@@ -214,6 +214,49 @@ router.post('/:id/market/buy', requireAuth, async (req, res) => {
 
   if (cost > member.cash) return res.status(400).json({ error: 'Liquidités insuffisantes' });
   if (qty > (lp?.amm_reserve || SHARES_PER_TEAM * AMM_RESERVE_PCT)) return res.status(400).json({ error: 'Pas assez d\'actions disponibles' });
+
+  // ---- Règle de concentration : max 40% du portefeuille par équipe ----
+  const { data: allHoldings } = await supabase
+    .from('league_holdings').select('team_id, shares')
+    .eq('league_id', leagueId).eq('user_id', req.user.id).gt('shares', 0);
+  const { data: allPrices } = await supabase
+    .from('league_team_prices').select('team_id, price').eq('league_id', leagueId);
+  const priceMap = Object.fromEntries((allPrices || []).map(p => [p.team_id, parseFloat(p.price)]));
+
+  // Valeur totale du portefeuille après achat
+  const stockVal = (allHoldings || []).reduce((s, h) => s + h.shares * (priceMap[h.team_id] || refPrice), 0);
+  const portfolioTotal = member.cash - cost + stockVal + cost; // cash restant + stocks actuels + nouvel achat
+
+  // Valeur de la position sur cette équipe après achat
+  const currentHolding = (allHoldings || []).find(h => h.team_id === teamId);
+  const currentShares = currentHolding?.shares || 0;
+  const newPositionValue = (currentShares + qty) * execPrice;
+  const concentrationPct = newPositionValue / portfolioTotal;
+
+  if (concentrationPct > 0.40) {
+    const maxShares = Math.floor((portfolioTotal * 0.40 - currentShares * execPrice) / execPrice);
+    return res.status(400).json({
+      error: `Limite de concentration dépassée: max 40% du portefeuille par équipe. Vous pouvez acheter au maximum ${Math.max(0, maxShares)} action(s) supplémentaire(s) de ${teamId}.`,
+      code: 'CONCENTRATION_LIMIT',
+      maxShares: Math.max(0, maxShares),
+      concentrationPct: Math.round(concentrationPct * 100),
+    });
+  }
+
+  // ---- Règle des 3 équipes minimum avant de dépasser 25% ----
+  const nbEquipes = new Set([
+    ...(allHoldings || []).filter(h => h.shares > 0).map(h => h.team_id),
+    teamId,
+  ]).size;
+
+  if (concentrationPct > 0.25 && nbEquipes < 3) {
+    return res.status(400).json({
+      error: `Pour investir plus de 25% dans une équipe, vous devez détenir au moins 3 équipes différentes. Vous en avez ${nbEquipes}.`,
+      code: 'MIN_DIVERSIFICATION',
+      nbEquipes,
+    });
+  }
+  // ----------------------------------------------------------------
 
   if (orderType === 'limit') {
     await supabase.from('league_orders').insert({ league_id:leagueId, user_id:req.user.id, team_id:teamId, side:'buy', price:execPrice, qty, status:'open' });
