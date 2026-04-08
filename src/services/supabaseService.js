@@ -11,6 +11,12 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY  // clé service (pas anon) pour les jobs backend
 );
 
+// Client séparé pour l'auth (utilise la clé anon)
+const supabaseAuth = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_ANON_KEY
+);
+
 // ---- PRIX ----
 
 async function getCurrentPrice(teamId) {
@@ -269,6 +275,7 @@ async function getLeaderboard(limit = 20) {
 
 module.exports = {
   supabase,
+  supabaseAuth,
   getCurrentPrice, getAllPrices, updatePrice, logPriceImpact,
   getNHLStats, updateNHLStats, markClinchBonusPaid,
   payDividend,

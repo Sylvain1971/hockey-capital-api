@@ -3,7 +3,7 @@
 // routes/auth.js
 // ============================================================
 const express = require('express');
-const { supabase } = require('../../services/supabaseService');
+const { supabase, supabaseAuth } = require('../../services/supabaseService');
 const router = express.Router();
 
 // Inscription
@@ -12,7 +12,7 @@ router.post('/register', async (req, res) => {
   if (!email || !password || !username) return res.status(400).json({ error: 'Champs requis manquants' });
   if (username.length < 3 || username.length > 30) return res.status(400).json({ error: 'Username: 3–30 caractères' });
 
-  const { data, error } = await supabase.auth.signUp({
+  const { data, error } = await supabaseAuth.auth.signUp({
     email, password,
     options: { data: { username, display_name: username } },
   });
@@ -23,7 +23,7 @@ router.post('/register', async (req, res) => {
 // Connexion
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  const { data, error } = await supabaseAuth.auth.signInWithPassword({ email, password });
   if (error) return res.status(401).json({ error: 'Identifiants invalides' });
   res.json({ token: data.session.access_token, user: { id: data.user.id, email: data.user.email } });
 });
