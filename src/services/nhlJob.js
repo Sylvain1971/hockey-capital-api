@@ -13,7 +13,21 @@ const {
   payDividend, supabase,
 } = require('./supabaseService');
 
-const processedGames = new Set(); // éviter de traiter le même match deux fois
+const processedGames = new Set(); // cache mémoire session
+
+/**
+ * Vérifie si un match a déjà été traité (en DB)
+ */
+async function isGameProcessed(gameId) {
+  if (processedGames.has(gameId)) return true;
+  const { data } = await supabase
+    .from('price_impact_log')
+    .select('id')
+    .eq('trigger', 'game_result')
+    .like('description', `%[${gameId}]%`)
+    .limit(1);
+  return data && data.length > 0;
+}
 
 /**
  * Job principal: traite les scores du jour
@@ -30,6 +44,10 @@ async function processScores(broadcast = null) {
   for (const game of games) {
     if (!game.isFinal) continue;
     if (processedGames.has(game.gameId)) continue;
+    if (await isGameProcessed(game.gameId)) {
+      processedGames.add(game.gameId); // sync cache
+      continue;
+    }
 
     processedGames.add(game.gameId);
 
@@ -68,7 +86,7 @@ async function processTeamGameResult(result, gameId, broadcast) {
 
     // Sauvegarder le nouveau prix global
     await updatePrice(teamId, impact.newPrice);
-    await logPriceImpact(teamId, impact.log.trigger, impact.log.description, currentPrice, impact.newPrice);
+    await logPriceImpact(teamId, impact.log.trigger, `${impact.log.description} [${gameId}]`, currentPrice, impact.newPrice);
 
     // Propager le prix dans toutes les ligues actives
     await propagatePriceToLeagues(teamId, impact.newPrice, impact.pctChange);

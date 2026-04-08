@@ -18,15 +18,45 @@ function todayStr() {
   return new Date().toISOString().split('T')[0];
 }
 
+function yesterdayStr() {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return d.toISOString().split('T')[0];
+}
+
 /**
- * Récupère les scores du jour (ou d'une date donnée)
+ * Récupère les scores du jour ET d'hier (matchs finaux des deux jours)
+ * Les matchs LNH finissent souvent après minuit — on doit checker les deux dates
  */
 async function fetchScores(date = null) {
-  const d = date || todayStr();
-  const res = await fetch(`${BASE}/score/${d}`);
-  if (!res.ok) throw new Error(`NHL scores API ${res.status}`);
-  const data = await res.json();
-  return parseGames(data.games || []);
+  if (date) {
+    const res = await fetch(`${BASE}/score/${date}`);
+    if (!res.ok) throw new Error(`NHL scores API ${res.status}`);
+    const data = await res.json();
+    return parseGames(data.games || []);
+  }
+
+  // Sans date: chercher aujourd'hui + hier pour ne rien manquer
+  const [resT, resY] = await Promise.all([
+    fetch(`${BASE}/score/${todayStr()}`),
+    fetch(`${BASE}/score/${yesterdayStr()}`),
+  ]);
+
+  const [dataT, dataY] = await Promise.all([
+    resT.ok ? resT.json() : { games: [] },
+    resY.ok ? resY.json() : { games: [] },
+  ]);
+
+  const gamesT = parseGames(dataT.games || []);
+  const gamesY = parseGames(dataY.games || []);
+
+  // Combiner, dédupliquer par gameId
+  const seen = new Set();
+  const all = [];
+  for (const g of [...gamesT, ...gamesY]) {
+    if (!seen.has(g.gameId)) { seen.add(g.gameId); all.push(g); }
+  }
+  return all;
 }
 
 /**
