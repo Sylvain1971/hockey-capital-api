@@ -146,3 +146,4 @@ Prix plancher        : $0.50
 Prix d'émission      : $5.00
 Actions/équipe       : 100
 ```
+  
