@@ -14,22 +14,35 @@ router.get('/teams', async (req, res) => {
     const { data: stats }  = await supabase.from('nhl_team_stats').select('*');
     const prices = await getAllPrices();
 
-    // Prix de la veille: on prend le premier enregistrement d'avant minuit aujourd'hui
+    // Prix de référence = premier enregistrement de la journée (prix d'ouverture)
+    // Si pas d'entrée hier, on prend le plus ancien prix du jour comme référence
     const todayMidnight = new Date();
     todayMidnight.setHours(0, 0, 0, 0);
-    const { data: prevPrices } = await supabase
+
+    // Essayer d'abord le dernier prix d'avant aujourd'hui (prix de clôture d'hier)
+    const { data: prevPricesHier } = await supabase
       .from('team_prices')
       .select('team_id, price, recorded_at')
       .lt('recorded_at', todayMidnight.toISOString())
       .order('recorded_at', { ascending: false })
-      .limit(64); // dernier prix avant minuit par equipe
+      .limit(64);
 
-    // Construire map prix précédent: dernier prix avant aujourd'hui
+    // Si pas de données d'hier, prendre le premier prix du jour (ouverture)
+    const { data: firstPricesAujourdhui } = await supabase
+      .from('team_prices')
+      .select('team_id, price, recorded_at')
+      .gte('recorded_at', todayMidnight.toISOString())
+      .order('recorded_at', { ascending: true })
+      .limit(64);
+
+    // Construire map: priorité à hier, sinon premier prix du jour
     const prevMap = {};
-    for (const p of prevPrices || []) {
-      if (!prevMap[p.team_id]) {
-        prevMap[p.team_id] = parseFloat(p.price);
-      }
+    for (const p of prevPricesHier || []) {
+      if (!prevMap[p.team_id]) prevMap[p.team_id] = parseFloat(p.price);
+    }
+    // Pour les équipes sans données hier, utiliser le premier prix du jour
+    for (const p of firstPricesAujourdhui || []) {
+      if (!prevMap[p.team_id]) prevMap[p.team_id] = parseFloat(p.price);
     }
 
     const priceMap  = Object.fromEntries(prices.map(p => [p.team_id, p]));

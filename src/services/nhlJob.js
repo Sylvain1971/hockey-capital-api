@@ -59,6 +59,31 @@ async function processScores(broadcast = null) {
 }
 
 /**
+ * Enregistre le prix d'ouverture du jour si pas encore fait
+ * Permet de calculer la vraie variation journalière
+ */
+async function snapshotOpenPrice(teamId, currentPrice) {
+  const todayMidnight = new Date();
+  todayMidnight.setHours(0, 0, 0, 0);
+
+  const { data } = await supabase
+    .from('team_prices')
+    .select('id')
+    .eq('team_id', teamId)
+    .gte('recorded_at', todayMidnight.toISOString())
+    .limit(1);
+
+  // Si aucun prix aujourd'hui encore, enregistrer le prix actuel comme prix d'ouverture
+  if (!data || data.length === 0) {
+    await supabase.from('team_prices').insert({
+      team_id: teamId,
+      price: currentPrice,
+      volume_24h: 0,
+    });
+  }
+}
+
+/**
  * Applique l'impact d'un résultat sur une équipe
  */
 async function processTeamGameResult(result, gameId, broadcast) {
@@ -67,6 +92,9 @@ async function processTeamGameResult(result, gameId, broadcast) {
   try {
     const stats = await getNHLStats(teamId);
     const currentPrice = await getCurrentPrice(teamId);
+
+    // Snapshot du prix d'ouverture du jour (si premier traitement aujourd'hui)
+    await snapshotOpenPrice(teamId, currentPrice);
 
     // Calcul du nouveau streak
     const currentStreak = stats.win_streak || 0;
@@ -159,6 +187,7 @@ async function processStandings(broadcast = null) {
     if (!team.teamId) continue;
     try {
       const currentPrice = await getCurrentPrice(team.teamId);
+      await snapshotOpenPrice(team.teamId, currentPrice);
 
       // Ajustement de classement (quotidien = hebdo ÷ 7)
       const adj = applyStandingsAdjustment(team.divisionRank, currentPrice, true);
