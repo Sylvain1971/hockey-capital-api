@@ -181,7 +181,7 @@ async function executeTrade({ userId, teamId, side, price, qty, orderId = null }
     // Mettre à jour le holding
     await upsertHolding(userId, teamId, qty, price);
     // Réduire le supply
-    await supabase.from('team_supply').update({ available: supabase.raw('available - ' + qty) }).eq('team_id', teamId);
+    await supabase.rpc('decrement_supply', { p_team_id: teamId, p_qty: qty });
     // Enregistrer la trade
     await supabase.from('trades').insert({ buyer_id: userId, team_id: teamId, price, qty, order_id: orderId });
   } else {
@@ -190,17 +190,13 @@ async function executeTrade({ userId, teamId, side, price, qty, orderId = null }
     // Réduire le holding
     await upsertHolding(userId, teamId, -qty, price);
     // Augmenter le supply
-    await supabase.from('team_supply').update({ available: supabase.raw('available + ' + qty) }).eq('team_id', teamId);
+    await supabase.rpc('increment_supply', { p_team_id: teamId, p_qty: qty });
     // Enregistrer la trade
     await supabase.from('trades').insert({ seller_id: userId, team_id: teamId, price, qty, order_id: orderId });
   }
 
-  // Mettre à jour le volume
-  await supabase.from('team_prices')
-    .update({ volume_24h: supabase.raw('volume_24h + ' + qty) })
-    .eq('team_id', teamId)
-    .order('recorded_at', { ascending: false })
-    .limit(1);
+  // Mettre à jour le volume via RPC
+  await supabase.rpc('increment_volume', { p_team_id: teamId, p_qty: qty });
 
   return { success: true, price, qty, total: cost };
 }
