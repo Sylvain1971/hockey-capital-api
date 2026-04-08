@@ -14,17 +14,49 @@ router.get('/teams', async (req, res) => {
     const { data: stats }  = await supabase.from('nhl_team_stats').select('*');
     const prices = await getAllPrices();
 
+    // Prix précédent (avant-dernier enregistrement) pour calculer la variation vs veille
+    const { data: prevPrices } = await supabase
+      .from('team_prices')
+      .select('team_id, price, recorded_at')
+      .order('recorded_at', { ascending: false })
+      .limit(64); // 2 entrées par équipe max
+
+    // Construire map prix précédent: on prend la 2e occurrence par équipe
+    const prevMap = {};
+    const seenTeams = {};
+    for (const p of prevPrices || []) {
+      if (!seenTeams[p.team_id]) {
+        seenTeams[p.team_id] = 1; // 1ère = prix actuel, ignorer
+      } else if (seenTeams[p.team_id] === 1) {
+        prevMap[p.team_id] = parseFloat(p.price); // 2ème = prix veille
+        seenTeams[p.team_id] = 2;
+      }
+    }
+
     const priceMap  = Object.fromEntries(prices.map(p => [p.team_id, p]));
     const supplyMap = Object.fromEntries(supply.map(s => [s.team_id, s.available]));
     const statsMap  = Object.fromEntries(stats.map(s => [s.team_id, s]));
 
-    const result = teams.map(t => ({
-      ...t,
-      price:     parseFloat(priceMap[t.id]?.price || 5),
-      volume24h: priceMap[t.id]?.volume_24h || 0,
-      available: supplyMap[t.id] ?? 100,
-      stats:     statsMap[t.id] || {},
-    }));
+    const TOTAL_SHARES = 120_000_000;
+
+    const result = teams.map(t => {
+      const currentPrice = parseFloat(priceMap[t.id]?.price || 25);
+      const prevPrice = prevMap[t.id] || currentPrice;
+      const changePct = prevPrice > 0 ? ((currentPrice - prevPrice) / prevPrice * 100) : 0;
+      const marketCap = currentPrice * TOTAL_SHARES;
+
+      return {
+        ...t,
+        price:      currentPrice,
+        prevPrice,
+        changePct:  Math.round(changePct * 100) / 100,
+        volume24h:  priceMap[t.id]?.volume_24h || 0,
+        available:  supplyMap[t.id] ?? TOTAL_SHARES,
+        marketCap,
+        marketCapB: Math.round(marketCap / 1_000_000) / 1000, // en milliards, arrondi
+        stats:      statsMap[t.id] || {},
+      };
+    });
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
