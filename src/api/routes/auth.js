@@ -1,9 +1,6 @@
 'use strict';
-// ============================================================
-// routes/auth.js
-// ============================================================
 const express = require('express');
-const { supabase, supabaseAuth } = require('../../services/supabaseService');
+const { supabaseAuth } = require('../../services/supabaseService');
 const router = express.Router();
 
 // Inscription
@@ -17,7 +14,7 @@ router.post('/register', async (req, res) => {
     options: { data: { username, display_name: username } },
   });
   if (error) return res.status(400).json({ error: error.message });
-  res.json({ message: 'Compte créé. Vérifiez votre email.', userId: data.user?.id });
+  res.json({ message: 'Compte créé!', userId: data.user?.id });
 });
 
 // Connexion
@@ -30,7 +27,7 @@ router.post('/login', async (req, res) => {
 
 // Déconnexion
 router.post('/logout', async (req, res) => {
-  await supabase.auth.signOut();
+  await supabaseAuth.auth.signOut();
   res.json({ message: 'Déconnecté' });
 });
 
