@@ -62,7 +62,23 @@ router.post('/', requireAuth, async (req, res) => {
   res.status(201).json({ league, inviteCode });
 });
 
-// ---- Rejoindre par code ----
+// ---- Rejoindre par code (body) ----
+router.post('/join', requireAuth, async (req, res) => {
+  const code = (req.body.inviteCode || '').trim().toUpperCase();
+  if (!code) return res.status(400).json({ error: 'Code requis' });
+  const { data: league } = await supabase.from('leagues')
+    .select('*').eq('invite_code', code).single();
+  if (!league) return res.status(404).json({ error: 'Code invalide' });
+  if (league.status !== 'open') return res.status(400).json({ error: 'Ligue fermee ou terminee' });
+  const { count } = await supabase.from('league_members').select('*', { count:'exact' }).eq('league_id', league.id);
+  if (count >= league.max_players) return res.status(400).json({ error: 'Ligue complete' });
+  const existing = await supabase.from('league_members').select('id').eq('league_id', league.id).eq('user_id', req.user.id).single();
+  if (existing.data) return res.status(400).json({ error: 'Deja membre de cette ligue' });
+  await supabase.from('league_members').insert({ league_id: league.id, user_id: req.user.id, cash: league.capital_virtuel });
+  res.json({ league });
+});
+
+// ---- Rejoindre par code (URL param) ----
 router.post('/join/:code', requireAuth, async (req, res) => {
   const { data: league } = await supabase.from('leagues')
     .select('*').eq('invite_code', req.params.code.toUpperCase()).single();
@@ -82,10 +98,11 @@ router.post('/join/:code', requireAuth, async (req, res) => {
 // ---- Mes ligues ----
 router.get('/mine', requireAuth, async (req, res) => {
   const { data } = await supabase.from('league_members')
-    .select('*, leagues(*)')
+    .select('is_creator, leagues(*)')
     .eq('user_id', req.user.id)
     .order('created_at', { ascending: false });
-  res.json(data || []);
+  const leagues = (data || []).map(m => ({ ...m.leagues, is_creator: m.is_creator }));
+  res.json(leagues);
 });
 
 // ---- Détails d'une ligue ----
