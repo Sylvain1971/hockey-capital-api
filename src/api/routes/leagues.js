@@ -128,6 +128,33 @@ router.get('/mine', requireAuth, async (req, res) => {
   res.json(all);
 });
 
+// ---- Supprimer une ligue (créateur seulement) ----
+router.delete('/:id', requireAuth, async (req, res) => {
+  const { data: league } = await supabase.from('leagues').select('creator_id').eq('id', req.params.id).single();
+  if (!league) return res.status(404).json({ error: 'Ligue introuvable' });
+  if (league.creator_id !== req.user.id) return res.status(403).json({ error: 'Seul le createur peut supprimer la ligue' });
+  await supabase.from('league_members').delete().eq('league_id', req.params.id);
+  await supabase.from('league_invitations').delete().eq('league_id', req.params.id);
+  await supabase.from('leagues').delete().eq('id', req.params.id);
+  res.json({ message: 'Ligue supprimee' });
+});
+
+// ---- Membres d'une ligue ----
+router.get('/:id/members', requireAuth, async (req, res) => {
+  const { data } = await supabase
+    .from('league_members')
+    .select('user_id, cash, is_creator, profiles(username, display_name)')
+    .eq('league_id', req.params.id);
+  const members = (data || []).map(m => ({
+    user_id: m.user_id,
+    username: m.profiles?.display_name || m.profiles?.username || 'Joueur',
+    cash: parseFloat(m.cash || 0),
+    is_creator: m.is_creator,
+    net_worth: parseFloat(m.cash || 0),
+  })).sort((a, b) => b.net_worth - a.net_worth);
+  res.json(members);
+});
+
 // ---- Détails d'une ligue ----
 router.get('/:id', async (req, res) => {
   const { data } = await supabase.from('leagues').select('*, league_members(count)').eq('id', req.params.id).single();
