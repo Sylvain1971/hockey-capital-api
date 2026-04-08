@@ -13,23 +13,24 @@ router.post('/register', async (req, res) => {
 
   const emailClean = email.toLowerCase().trim();
 
-  // 1. Verifier la whitelist admin
+  // Verifier whitelist admin (createurs de ligue)
   const { data: allowed } = await supabase
     .from('allowed_emails').select('email')
     .eq('email', emailClean).single();
 
-  // 2. Verifier les invitations de ligue
+  // Verifier invitation de ligue (joueurs invites)
   const { data: invitation } = await supabase
     .from('league_invitations').select('id, league_id, used')
-    .eq('email', emailClean).eq('used', false).single();
+    .eq('email', emailClean).eq('used', false)
+    .order('invited_at', { ascending: false })
+    .limit(1).single();
 
   if (!allowed && !invitation) {
     return res.status(403).json({
-      error: 'Acces sur invitation seulement. Demandez une invitation au createur de la ligue.'
+      error: 'Acces sur invitation seulement. Demandez un code au createur de votre ligue.'
     });
   }
 
-  // Creer le compte
   const { data, error } = await supabaseAuth.auth.signUp({
     email, password,
     options: { data: { username, display_name: username } },
@@ -38,18 +39,24 @@ router.post('/register', async (req, res) => {
 
   const userId = data.user?.id;
 
-  // 3. Si invite via ligue: rejoindre automatiquement + marquer invitation utilisee
-  if (invitation && userId) {
-    const { data: league } = await supabase
-      .from('leagues').select('*').eq('id', invitation.league_id).single();
-    if (league) {
-      await supabase.from('league_members').insert({
-        league_id: league.id, user_id: userId,
-        cash: league.capital_virtuel, is_creator: false,
-      }).single();
+  // Si invite: rejoindre toutes les ligues en attente pour cet email
+  if (userId) {
+    const { data: pendingInvites } = await supabase
+      .from('league_invitations').select('id, league_id')
+      .eq('email', emailClean).eq('used', false);
+
+    for (const inv of pendingInvites || []) {
+      const { data: league } = await supabase
+        .from('leagues').select('*').eq('id', inv.league_id).single();
+      if (league && league.status === 'open') {
+        await supabase.from('league_members').upsert({
+          league_id: league.id, user_id: userId,
+          cash: league.capital_virtuel, is_creator: false,
+        }, { onConflict: 'league_id,user_id' });
+        await supabase.from('league_invitations')
+          .update({ used: true }).eq('id', inv.id);
+      }
     }
-    await supabase.from('league_invitations')
-      .update({ used: true }).eq('id', invitation.id);
   }
 
   res.json({ message: 'Compte cree!', userId });

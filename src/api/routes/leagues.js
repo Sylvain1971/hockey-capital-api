@@ -107,12 +107,25 @@ router.post('/join/:code', requireAuth, async (req, res) => {
 
 // ---- Mes ligues ----
 router.get('/mine', requireAuth, async (req, res) => {
-  const { data } = await supabase.from('league_members')
+  // Ligues où l'utilisateur est membre
+  const { data: member } = await supabase
+    .from('league_members')
     .select('is_creator, leagues(*)')
-    .eq('user_id', req.user.id)
-    .order('created_at', { ascending: false });
-  const leagues = (data || []).map(m => ({ ...m.leagues, is_creator: m.is_creator }));
-  res.json(leagues);
+    .eq('user_id', req.user.id);
+
+  // Ligues créées par l'utilisateur (au cas où il ne serait pas dans league_members)
+  const { data: created } = await supabase
+    .from('leagues')
+    .select('*')
+    .eq('creator_id', req.user.id);
+
+  // Fusionner sans doublons
+  const memberLeagueIds = new Set((member || []).map(m => m.leagues?.id).filter(Boolean));
+  const memberLeagues = (member || []).map(m => ({ ...m.leagues, is_creator: m.is_creator })).filter(l => l.id);
+  const createdOnly = (created || []).filter(l => !memberLeagueIds.has(l.id)).map(l => ({ ...l, is_creator: true }));
+
+  const all = [...memberLeagues, ...createdOnly].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  res.json(all);
 });
 
 // ---- Détails d'une ligue ----
