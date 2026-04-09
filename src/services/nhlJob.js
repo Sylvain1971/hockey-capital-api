@@ -1,7 +1,7 @@
-'use strict';
+﻿'use strict';
 /**
- * Hockey Capital — Job de traitement LNH v2.0
- * Lit season_config.mode au démarrage → choisit la stratégie regular ou playoffs
+ * Hockey Capital â€” Job de traitement LNH v2.0
+ * Lit season_config.mode au dÃ©marrage â†’ choisit la stratÃ©gie regular ou playoffs
  */
 
 const { fetchScores, fetchStandings } = require('./nhlApi');
@@ -19,7 +19,7 @@ const {
 
 const processedGames = new Set();
 
-// ── Config globale (chargée au démarrage et rechargée si besoin) ──────────────
+// â”€â”€ Config globale (chargÃ©e au dÃ©marrage et rechargÃ©e si besoin) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let seasonConfig = { mode: 'regular', playoff_round: null };
 
 async function loadSeasonConfig() {
@@ -28,7 +28,7 @@ async function loadSeasonConfig() {
   return seasonConfig;
 }
 
-// ── Helpers partagés ─────────────────────────────────────────────────────────
+// â”€â”€ Helpers partagÃ©s â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function isGameProcessed(gameId) {
   if (processedGames.has(gameId)) return true;
@@ -64,7 +64,7 @@ async function propagatePriceToLeagues(teamId, newPrice, pctChange) {
   } catch (e) { console.error('[LEAGUES] Erreur propagation prix:', e.message); }
 }
 
-// ── SAISON RÉGULIÈRE ─────────────────────────────────────────────────────────
+// â”€â”€ SAISON RÃ‰GULIÃˆRE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function processScores(broadcast = null) {
   let games;
@@ -122,7 +122,7 @@ async function processTeamGameResult(result, gameId, broadcast) {
       } catch (e) { console.error(`[DIV] Erreur ${teamId}:`, e.message); }
     }
     if (broadcast) broadcast({ type: 'PRICE_UPDATE', teamId, newPrice: impact.newPrice, pctChange: impact.pctChange, reason: impact.log.description, dividend: impact.dividend });
-    console.log(`[PRIX] ${teamId}: $${currentPrice} → $${impact.newPrice} (${impact.pctChange >= 0 ? '+' : ''}${impact.pctChange}%)`);
+    console.log(`[PRIX] ${teamId}: $${currentPrice} â†’ $${impact.newPrice} (${impact.pctChange >= 0 ? '+' : ''}${impact.pctChange}%)`);
   } catch (err) { console.error(`[GAME] Erreur ${teamId}:`, err.message); }
 }
 
@@ -159,10 +159,10 @@ async function processStandings(broadcast = null) {
   }
 }
 
-// ── SÉRIES ÉLIMINATOIRES ─────────────────────────────────────────────────────
+// â”€â”€ SÃ‰RIES Ã‰LIMINATOIRES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /**
- * Job principal séries — remplace processScores() quand mode = 'playoffs'
+ * Job principal sÃ©ries â€” remplace processScores() quand mode = 'playoffs'
  */
 async function processPlayoffScores(broadcast = null) {
   await loadSeasonConfig();
@@ -181,13 +181,13 @@ async function processPlayoffScores(broadcast = null) {
     for (const result of [game.homeResult, game.awayResult]) {
       if (!result?.teamId) continue;
 
-      // Vérifier que l'équipe est encore active en séries
+      // VÃ©rifier que l'Ã©quipe est encore active en sÃ©ries
       const { data: teamData } = await supabase
         .from('teams').select('playoff_status, playoff_locked, season_pts, conference_rank')
         .eq('id', result.teamId).single();
 
       if (!teamData || teamData.playoff_status !== 'active' || teamData.playoff_locked) {
-        console.log(`[PLAYOFFS] ${result.teamId} ignoré (statut: ${teamData?.playoff_status})`);
+        console.log(`[PLAYOFFS] ${result.teamId} ignorÃ© (statut: ${teamData?.playoff_status})`);
         continue;
       }
 
@@ -202,7 +202,7 @@ async function processTeamPlayoffResult(result, game, round, teamData, broadcast
     const currentPrice = await getCurrentPrice(teamId);
     await snapshotOpenPrice(teamId, currentPrice);
 
-    // Trouver les données de l'adversaire pour le calcul d'upset
+    // Trouver les donnÃ©es de l'adversaire pour le calcul d'upset
     const opponentResult = game.homeResult?.teamId === teamId ? game.awayResult : game.homeResult;
     let opponentData = {};
     if (opponentResult?.teamId) {
@@ -221,7 +221,7 @@ async function processTeamPlayoffResult(result, game, round, teamData, broadcast
     await logPriceImpact(teamId, impact.log.trigger, `${impact.log.description} [${game.gameId}]`, currentPrice, impact.newPrice);
     await propagatePriceToLeagues(teamId, impact.newPrice, impact.pctChange);
 
-    // Récupérer état série courant depuis les stats
+    // RÃ©cupÃ©rer Ã©tat sÃ©rie courant depuis les stats
     const stats = await getNHLStats(teamId);
     const seriesWins   = (stats.playoff_series_wins   || 0) + (won ? 1 : 0);
     const seriesLosses = (stats.playoff_series_losses || 0) + (won ? 0 : 1);
@@ -230,7 +230,7 @@ async function processTeamPlayoffResult(result, game, round, teamData, broadcast
 
     await updateNHLStats(teamId, { playoff_series_wins: seriesWins, playoff_series_losses: seriesLosses });
 
-    // Détecter et appliquer les événements one-shot
+    // DÃ©tecter et appliquer les Ã©vÃ©nements one-shot
     const events = await detectPlayoffEvents({
       teamId, round, seriesWins, seriesLosses, isChampionshipRound,
       thisTeam: { season_pts: teamData.season_pts, conference_rank: teamData.conference_rank },
@@ -261,38 +261,227 @@ async function processTeamPlayoffResult(result, game, round, teamData, broadcast
       await logPlayoffEvent({ teamId, eventType: event.type, priceImpact: event.priceImpact, round, upsetCoeff: event.upsetCoeff });
       await propagatePriceToLeagues(teamId, latestPrice, eventImpact.pctChange);
 
-      // Figer le marché si élimination ou champion
+      // Figer le marchÃ© si Ã©limination ou champion
       if (event.type === 'eliminated' || event.type === 'champion') {
         await supabase.from('teams').update({
           playoff_locked: true,
           playoff_status: event.type === 'champion' ? 'champion' : 'eliminated',
           eliminated_at: new Date().toISOString(),
         }).eq('id', teamId);
-        console.log(`[PLAYOFFS] ${teamId} ${event.type === 'champion' ? '🏆 Champion!' : 'éliminé'} — marché figé`);
+        console.log(`[PLAYOFFS] ${teamId} ${event.type === 'champion' ? 'ðŸ† Champion!' : 'Ã©liminÃ©'} â€” marchÃ© figÃ©`);
       }
 
       if (broadcast) broadcast({ type: event.type.toUpperCase(), teamId, newPrice: latestPrice, pctChange: eventImpact.pctChange, round });
     }
 
     if (broadcast) broadcast({ type: 'PRICE_UPDATE', teamId, newPrice: latestPrice, pctChange: impact.pctChange, reason: impact.log.description });
-    console.log(`[PLAYOFFS R${round}] ${teamId}: $${currentPrice} → $${latestPrice} (${impact.pctChange >= 0 ? '+' : ''}${impact.pctChange}%)`);
+    console.log(`[PLAYOFFS R${round}] ${teamId}: $${currentPrice} â†’ $${latestPrice} (${impact.pctChange >= 0 ? '+' : ''}${impact.pctChange}%)`);
 
   } catch (err) { console.error(`[PLAYOFFS] Erreur ${teamId}:`, err.message); }
 }
 
-// ── Dispatcher principal ─────────────────────────────────────────────────────
+// â”
+// â”€â”€ Basculement automatique saison â†’ sÃ©ries â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /**
- * Point d'entrée unique appelé par le scheduler (toutes les 30s)
- * Choisit automatiquement la bonne stratégie selon season_config
+ * DÃ©tecte automatiquement la fin de saison rÃ©guliÃ¨re via l'API NHL.
+ * AppelÃ© Ã  chaque cycle en mode 'regular'.
+ *
+ * Logique :
+ *  - L'API NHL retourne gameType=3 pour les matchs de sÃ©ries
+ *  - Quand on dÃ©tecte un match de type 3 terminÃ©, c'est que les sÃ©ries ont commencÃ©
+ *  - On dÃ©clenche alors le basculement complet automatiquement
+ */
+async function checkAutoBasculement(broadcast = null) {
+  try {
+    const BASE = 'https://api-web.nhle.com/v1';
+    const today = new Date().toISOString().split('T')[0];
+
+    // VÃ©rifier s'il y a des matchs de sÃ©ries aujourd'hui (gameType 3)
+    const res = await fetch(`${BASE}/score/${today}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const games = data.games || [];
+
+    // Chercher aussi la veille (matchs tardifs)
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yStr = yesterday.toISOString().split('T')[0];
+    const resY = await fetch(`${BASE}/score/${yStr}`);
+    const dataY = resY.ok ? await resY.json() : { games: [] };
+    const allGames = [...games, ...(dataY.games || [])];
+
+    // Un match de sÃ©ries est gameType === 3
+    const hasPlayoffGame = allGames.some(g => g.gameType === 3);
+    if (!hasPlayoffGame) return; // Saison rÃ©guliÃ¨re encore en cours
+
+    console.log('[AUTO-BASCULEMENT] ðŸ’ Matchs de sÃ©ries dÃ©tectÃ©s â€” dÃ©marrage du basculement automatique!');
+    await executerBasculementAuto(broadcast);
+
+  } catch (err) {
+    console.error('[AUTO-BASCULEMENT] Erreur dÃ©tection:', err.message);
+  }
+}
+
+/**
+ * ExÃ©cute le basculement complet vers le mode sÃ©ries.
+ * AppelÃ© automatiquement lors de la dÃ©tection du premier match de sÃ©ries.
+ */
+async function executerBasculementAuto(broadcast = null) {
+  const now = new Date().toISOString();
+  console.log('[AUTO-BASCULEMENT] DÃ©but Ã ', now);
+
+  try {
+    // 1. RÃ©cupÃ©rer standings finaux de saison rÃ©guliÃ¨re
+    const BASE = 'https://api-web.nhle.com/v1';
+    const res = await fetch(`${BASE}/standings/now`);
+    const data = res.ok ? await res.json() : { standings: [] };
+    const standings = data.standings || [];
+
+    // 2. Identifier les qualifiÃ©s (clinchIndicator prÃ©sent et !== 'e')
+    //    'e' = Ã©liminÃ©, 'x'/'y'/'z' = qualifiÃ©, sans indicateur = encore en jeu
+    const { NHL_TO_HC } = require('./nhlApi');
+    const qualified = [];
+    const confRanks = {};
+    const teamPts = {};
+
+    // Trier par leagueSequence pour avoir le rang correct
+    const sorted = [...standings].sort((a, b) => (a.leagueSequence||99) - (b.leagueSequence||99));
+
+    // Top 16 du classement ligue (sans les Ã©liminÃ©s dÃ©finitifs 'e')
+    let qualCount = 0;
+    for (const s of sorted) {
+      const abbr = s.teamAbbrev?.default;
+      const hcId = NHL_TO_HC[abbr];
+      if (!hcId) continue;
+      teamPts[hcId] = s.points || 0;
+      confRanks[hcId] = s.conferenceSequence || s.leagueSequence || 99;
+      if (s.clinchIndicator !== 'e' && qualCount < 16) {
+        qualified.push(hcId);
+        qualCount++;
+      }
+    }
+
+    const notQualified = Object.keys(NHL_TO_HC).filter(id => !qualified.includes(id));
+
+    // 3. Snapshot season_close_price depuis current_prices
+    const { data: prices } = await supabase.from('current_prices').select('team_id, price');
+    for (const cp of prices || []) {
+      await supabase.from('teams')
+        .update({ season_close_price: parseFloat(cp.price) })
+        .eq('id', cp.team_id).is('season_close_price', null);
+    }
+    console.log('[AUTO-BASCULEMENT] season_close_price snapshotÃ©');
+
+    // 4. Marquer season_pts + conference_rank
+    for (const [id, pts] of Object.entries(teamPts)) {
+      await supabase.from('teams')
+        .update({ season_pts: pts, conference_rank: confRanks[id] || null })
+        .eq('id', id);
+    }
+    console.log('[AUTO-BASCULEMENT] season_pts + conference_rank mis Ã  jour');
+
+    // 5. Ã‰quipes actives
+    if (qualified.length > 0) {
+      await supabase.from('teams')
+        .update({ playoff_status:'active', playoff_round:1, playoff_locked:false, eliminated_at:null })
+        .in('id', qualified);
+    }
+
+    // 6. Ã‰quipes non qualifiÃ©es
+    if (notQualified.length > 0) {
+      await supabase.from('teams')
+        .update({ playoff_status:'not_qualified', playoff_locked:true, eliminated_at:now })
+        .in('id', notQualified);
+    }
+
+    // 7. Bascule season_config
+    await supabase.from('season_config')
+      .update({ mode:'playoffs', playoff_round:1, playoffs_started_at:now, updated_at:now })
+      .eq('id', 1);
+
+    // Recharger la config locale
+    await loadSeasonConfig();
+
+    console.log(`[AUTO-BASCULEMENT] âœ… TerminÃ© â€” ${qualified.length} Ã©quipes actives, ${notQualified.length} figÃ©es`);
+    console.log('[AUTO-BASCULEMENT] QualifiÃ©es:', qualified.join(', '));
+
+    if (broadcast) {
+      broadcast({ type:'PLAYOFFS_STARTED', round:1, qualified, notQualified, timestamp:now });
+    }
+
+  } catch (err) {
+    console.error('[AUTO-BASCULEMENT] Erreur exÃ©cution:', err.message);
+  }
+}
+
+// â”€â”€ Avancement automatique de ronde â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+/**
+ * DÃ©tecte automatiquement le passage Ã  la ronde suivante.
+ * En mode playoffs, vÃ©rifie si toutes les sÃ©ries de la ronde courante sont terminÃ©es.
+ * Utilise l'endpoint playoff/bracket de l'API NHL.
+ */
+async function checkRondeAvancement(broadcast = null) {
+  const round = seasonConfig.playoff_round || 1;
+  if (round >= 4) return; // Finale Stanley â€” pas d'avancement possible
+
+  try {
+    const BASE = 'https://api-web.nhle.com/v1';
+    // VÃ©rifier via les standings si de nouvelles Ã©quipes ont un playoff_round > round courant
+    // Ou plus simplement: compter les Ã©quipes encore actives â€” si < 16/8/4/2 selon la ronde
+    const expectedActive = { 1:16, 2:8, 3:4, 4:2 };
+    const { data: activeTeams } = await supabase.from('teams')
+      .select('id').eq('playoff_status','active');
+
+    const currentActive = activeTeams?.length || 0;
+    const nextRoundExpected = expectedActive[round + 1];
+
+    if (currentActive === nextRoundExpected) {
+      console.log(`[AUTO-RONDE] ðŸ’ ${currentActive} Ã©quipes actives â†’ passage Ã  la ronde ${round + 1}!`);
+      const now = new Date().toISOString();
+      await supabase.from('season_config')
+        .update({ playoff_round: round + 1, updated_at: now })
+        .eq('id', 1);
+      await supabase.from('teams')
+        .update({ playoff_round: round + 1 })
+        .eq('playoff_status', 'active');
+
+      // RÃ©initialiser les stats de sÃ©rie
+      const { data: active } = await supabase.from('teams').select('id').eq('playoff_status','active');
+      for (const t of active || []) {
+        await supabase.from('nhl_team_stats')
+          .update({ playoff_series_wins:0, playoff_series_losses:0 })
+          .eq('team_id', t.id);
+      }
+
+      await loadSeasonConfig();
+      console.log(`[AUTO-RONDE] âœ… Ronde ${round + 1} dÃ©marrÃ©e â€” ${currentActive} Ã©quipes`);
+      if (broadcast) broadcast({ type:'ROUND_ADVANCED', round: round + 1, timestamp: now });
+    }
+  } catch (err) {
+    console.error('[AUTO-RONDE] Erreur:', err.message);
+  }
+}
+
+// â”€â”€ Dispatcher principal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+/**
+ * Point d'entrÃ©e unique â€” toutes les 30 secondes.
+ * Tout est automatique : dÃ©tection fin de saison, basculement, avancement de ronde.
  */
 async function runJob(broadcast = null) {
   await loadSeasonConfig();
-  if (seasonConfig.mode === 'playoffs') {
-    await processPlayoffScores(broadcast);
-  } else {
+
+  if (seasonConfig.mode === 'regular') {
+    // Mode saison rÃ©guliÃ¨re â€” traitement normal + surveillance fin de saison
     await processScores(broadcast);
     await processStandings(broadcast);
+    await checkAutoBasculement(broadcast); // ðŸ” Surveille la fin de saison
+  } else {
+    // Mode sÃ©ries â€” traitement sÃ©ries + avancement de ronde automatique
+    await processPlayoffScores(broadcast);
+    await checkRondeAvancement(broadcast); // ðŸ” Surveille les changements de ronde
   }
 }
 
