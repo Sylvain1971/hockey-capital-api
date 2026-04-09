@@ -7,7 +7,7 @@
 
 const express = require('express');
 const router  = express.Router();
-const { supabase } = require('../services/supabaseService');
+const { supabase } = require('../../services/supabaseService');
 const { verifyToken } = require('../middleware/auth');
 
 // GET /api/market/season-config
@@ -23,46 +23,48 @@ router.get('/market/season-config', async (req, res) => {
 router.post('/playoffs/distress-sell', verifyToken, async (req, res) => {
   const { leagueId, teamId, qty } = req.body;
   const userId = req.user.id;
-  if (!leagueId || !teamId || !qty || qty <= 0) return res.status(400).json({ error: 'Paramètres invalides' });
+  if (!leagueId || !teamId || !qty || qty <= 0) return res.status(400).json({ error: 'Parametres invalides' });
 
   try {
-    // 1. Vérifier que l'équipe est figée
-    const { data: team } = await supabase.from('teams').select('playoff_locked, playoff_status, eliminated_at, season_close_price, price').eq('id', teamId).single();
-    if (!team?.playoff_locked) return res.status(400).json({ error: 'Cette équipe n\'est pas figée' });
-    if (team.playoff_status === 'champion') return res.status(400).json({ error: 'Le champion ne peut pas être vendu en détresse' });
+    const { data: team } = await supabase.from('teams')
+      .select('playoff_locked, playoff_status, eliminated_at, season_close_price, price')
+      .eq('id', teamId).single();
+    if (!team?.playoff_locked) return res.status(400).json({ error: 'Cette equipe n est pas figee' });
+    if (team.playoff_status === 'champion') return res.status(400).json({ error: 'Le champion ne peut pas etre vendu en detresse' });
 
-    // 2. Vérifier la position du joueur
-    const { data: holding } = await supabase.from('league_holdings').select('shares').eq('league_id', leagueId).eq('team_id', teamId).eq('user_id', userId).single();
-    if (!holding || holding.shares < qty) return res.status(400).json({ error: 'Pas assez d\'actions' });
+    const { data: holding } = await supabase.from('league_holdings')
+      .select('shares').eq('league_id', leagueId).eq('team_id', teamId).eq('user_id', userId).single();
+    if (!holding || holding.shares < qty) return res.status(400).json({ error: 'Pas assez d actions' });
 
-    // 3. Calculer la pénalité
-    const elimAt  = team.eliminated_at ? new Date(team.eliminated_at) : new Date();
-    const jours   = Math.max(0, (Date.now() - elimAt.getTime()) / 86400000);
+    const elimAt   = team.eliminated_at ? new Date(team.eliminated_at) : new Date();
+    const jours    = Math.max(0, (Date.now() - elimAt.getTime()) / 86400000);
     const penalite = Math.min(0.15 + Math.pow(jours, 2) * 0.025, 0.50);
     const SPREAD   = 0.01;
     const prixFige = parseFloat(team.season_close_price || team.price || 0);
     const gross    = prixFige * qty;
-    const cashRecu = parseFloat((gross * (1 - penalite) * (1 - SPREAD)).toFixed(2));
+    const cashRecu  = parseFloat((gross * (1 - penalite) * (1 - SPREAD)).toFixed(2));
     const cashBrule = parseFloat((gross * penalite).toFixed(2));
 
-    // 4. Exécuter la transaction
-    // Retirer les actions
     const newShares = holding.shares - qty;
     if (newShares === 0) {
-      await supabase.from('league_holdings').delete().eq('league_id', leagueId).eq('team_id', teamId).eq('user_id', userId);
+      await supabase.from('league_holdings').delete()
+        .eq('league_id', leagueId).eq('team_id', teamId).eq('user_id', userId);
     } else {
-      await supabase.from('league_holdings').update({ shares: newShares }).eq('league_id', leagueId).eq('team_id', teamId).eq('user_id', userId);
+      await supabase.from('league_holdings').update({ shares: newShares })
+        .eq('league_id', leagueId).eq('team_id', teamId).eq('user_id', userId);
     }
 
-    // Ajouter le cash au membre (moins la pénalité brûlée)
-    const { data: member } = await supabase.from('league_members').select('cash').eq('league_id', leagueId).eq('user_id', userId).single();
-    await supabase.from('league_members').update({ cash: parseFloat(member.cash) + cashRecu }).eq('league_id', leagueId).eq('user_id', userId);
+    const { data: member } = await supabase.from('league_members')
+      .select('cash').eq('league_id', leagueId).eq('user_id', userId).single();
+    await supabase.from('league_members')
+      .update({ cash: parseFloat(member.cash) + cashRecu })
+      .eq('league_id', leagueId).eq('user_id', userId);
 
-    // Logger la transaction
     await supabase.from('league_trades').insert({
       league_id: leagueId, user_id: userId, team_id: teamId,
       type: 'distress_sell', qty, price: prixFige,
-      total: cashRecu, penalty_pct: parseFloat((penalite * 100).toFixed(2)),
+      total: cashRecu,
+      penalty_pct: parseFloat((penalite * 100).toFixed(2)),
       cash_burned: cashBrule,
     });
 
