@@ -298,10 +298,22 @@ router.post('/:id/market/buy', requireAuth, async (req, res) => {
   }
 
   // Exécution marché immédiate via AMM
+  const existingHolding = (allHoldings || []).find(h => h.team_id === teamId);
+  const existingShares = existingHolding?.shares || 0;
+  const newShares = existingShares + qty;
+  const existingAvgCost = existingHolding?.avg_cost || execPrice;
+  // Nouveau coût moyen pondéré
+  const newAvgCost = existingShares > 0
+    ? ((existingAvgCost * existingShares) + (execPrice * qty)) / newShares
+    : execPrice;
+
   await Promise.all([
     supabase.from('league_members').update({ cash: member.cash - cost }).eq('league_id', leagueId).eq('user_id', req.user.id),
     supabase.from('league_team_prices').update({ amm_reserve: (lp?.amm_reserve || 7000) - qty }).eq('league_id', leagueId).eq('team_id', teamId),
-    supabase.from('league_holdings').upsert({ league_id:leagueId, user_id:req.user.id, team_id:teamId, shares: qty, avg_cost: execPrice }, { onConflict:'league_id,user_id,team_id', ignoreDuplicates:false }),
+    supabase.from('league_holdings').upsert(
+      { league_id:leagueId, user_id:req.user.id, team_id:teamId, shares: newShares, avg_cost: parseFloat(newAvgCost.toFixed(4)) },
+      { onConflict: 'league_id,user_id,team_id' }
+    ),
     supabase.from('league_trades').insert({ league_id:leagueId, buyer_id:req.user.id, team_id:teamId, price:execPrice, qty }),
   ]);
 
