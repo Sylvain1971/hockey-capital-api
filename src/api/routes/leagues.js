@@ -437,8 +437,12 @@ router.delete('/:id/members/:userId', requireAuth, async (req, res) => {
 
   // Remettre les actions dans la réserve AMM
   for (const h of (holdings || [])) {
+    // Lire la réserve actuelle, puis ajouter les actions
+    const { data: lp } = await supabase.from('league_team_prices')
+      .select('amm_reserve').eq('league_id', leagueId).eq('team_id', h.team_id).single();
+    const currentReserve = lp?.amm_reserve || 0;
     await supabase.from('league_team_prices')
-      .update({ amm_reserve: supabase.raw(`amm_reserve + ${h.shares}`) })
+      .update({ amm_reserve: currentReserve + h.shares })
       .eq('league_id', leagueId).eq('team_id', h.team_id);
   }
 
