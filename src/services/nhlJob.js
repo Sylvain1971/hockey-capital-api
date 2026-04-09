@@ -41,21 +41,34 @@ async function processScores(broadcast = null) {
     return;
   }
 
+  let processedAny = false;
+
   for (const game of games) {
     if (!game.isFinal) continue;
     if (processedGames.has(game.gameId)) continue;
     if (await isGameProcessed(game.gameId)) {
-      processedGames.add(game.gameId); // sync cache
+      processedGames.add(game.gameId);
       continue;
     }
 
+    // Snapshot AVANT l'impact pour chaque equipe (prix d'ouverture = prix avant le match)
+    for (const result of [game.homeResult, game.awayResult]) {
+      if (!result?.teamId) continue;
+      try {
+        const { data: cp } = await supabase.from('current_prices').select('price').eq('team_id', result.teamId).single();
+        if (cp) await snapshotOpenPrice(result.teamId, parseFloat(cp.price));
+      } catch(e) {}
+    }
+
     processedGames.add(game.gameId);
+    processedAny = true;
 
     for (const result of [game.homeResult, game.awayResult]) {
       if (!result || !result.teamId) continue;
       await processTeamGameResult(result, game.gameId, broadcast);
     }
   }
+  return processedAny;
 }
 
 /**
@@ -91,9 +104,6 @@ async function processTeamGameResult(result, gameId, broadcast) {
   try {
     const stats = await getNHLStats(teamId);
     const currentPrice = await getCurrentPrice(teamId);
-
-    // Snapshot du prix d'ouverture du jour (si premier traitement aujourd'hui)
-    await snapshotOpenPrice(teamId, currentPrice);
 
     // Calcul du nouveau streak
     const currentStreak = stats.win_streak || 0;
@@ -186,6 +196,7 @@ async function processStandings(broadcast = null) {
     if (!team.teamId) continue;
     try {
       const currentPrice = await getCurrentPrice(team.teamId);
+      // Snapshot classement seulement si pas encore fait aujourd'hui (matchs ont priorité)
       await snapshotOpenPrice(team.teamId, currentPrice);
 
       // Ajustement de classement (quotidien = hebdo ÷ 7)
