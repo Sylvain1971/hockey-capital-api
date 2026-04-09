@@ -63,17 +63,16 @@ async function processScores(broadcast = null) {
  * Permet de calculer la vraie variation journalière
  */
 async function snapshotOpenPrice(teamId, currentPrice) {
-  const todayMidnight = new Date();
-  todayMidnight.setHours(0, 0, 0, 0);
+  const todayMidnightUTC = new Date();
+  todayMidnightUTC.setUTCHours(0, 0, 0, 0); // minuit UTC
 
   const { data } = await supabase
     .from('team_prices')
     .select('id')
     .eq('team_id', teamId)
-    .gte('recorded_at', todayMidnight.toISOString())
+    .gte('recorded_at', todayMidnightUTC.toISOString())
     .limit(1);
 
-  // Si aucun prix aujourd'hui encore, enregistrer le prix actuel comme prix d'ouverture
   if (!data || data.length === 0) {
     await supabase.from('team_prices').insert({
       team_id: teamId,
