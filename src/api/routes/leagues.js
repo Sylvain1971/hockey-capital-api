@@ -144,17 +144,45 @@ router.delete('/:id', requireAuth, async (req, res) => {
 
 // ---- Membres d'une ligue ----
 router.get('/:id/members', requireAuth, async (req, res) => {
+  const leagueId = req.params.id;
   const { data } = await supabase
     .from('league_members')
     .select('user_id, cash, is_creator, profiles(username, display_name)')
-    .eq('league_id', req.params.id);
-  const members = (data || []).map(m => ({
-    user_id: m.user_id,
-    username: m.profiles?.display_name || m.profiles?.username || 'Joueur',
-    cash: parseFloat(m.cash || 0),
-    is_creator: m.is_creator,
-    net_worth: parseFloat(m.cash || 0),
-  })).sort((a, b) => b.net_worth - a.net_worth);
+    .eq('league_id', leagueId);
+
+  // Vrais prix du marché LNH pour valoriser les actions
+  const { data: marketPrices } = await supabase.from('current_prices').select('team_id, price');
+  const priceMap = Object.fromEntries((marketPrices || []).map(p => [p.team_id, parseFloat(p.price)]));
+
+  // Calculer la valeur totale pour chaque membre (cash + valeur actions au prix marché)
+  const members = await Promise.all((data || []).map(async m => {
+    const { data: holdings } = await supabase
+      .from('league_holdings')
+      .select('team_id, shares, avg_cost')
+      .eq('league_id', leagueId)
+      .eq('user_id', m.user_id)
+      .gt('shares', 0);
+
+    const stockValue = (holdings || []).reduce((s, h) => {
+      const price = priceMap[h.team_id] || h.avg_cost || 0;
+      return s + h.shares * price;
+    }, 0);
+
+    const cash = parseFloat(m.cash || 0);
+    const netWorth = cash + stockValue;
+
+    return {
+      user_id: m.user_id,
+      username: m.profiles?.display_name || m.profiles?.username || 'Joueur',
+      cash,
+      stock_value: stockValue,
+      net_worth: netWorth,
+      is_creator: m.is_creator,
+    };
+  }));
+
+  // Trier par valeur totale décroissante
+  members.sort((a, b) => b.net_worth - a.net_worth);
   res.json(members);
 });
 
