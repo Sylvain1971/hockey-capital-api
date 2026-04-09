@@ -83,10 +83,13 @@ router.post('/join', requireAuth, async (req, res) => {
     .select('*').eq('invite_code', code).single();
   if (!league) return res.status(404).json({ error: 'Code invalide' });
   if (league.status !== 'open') return res.status(400).json({ error: 'Ligue fermee ou terminee' });
-  const { count } = await supabase.from('league_members').select('*', { count:'exact' }).eq('league_id', league.id);
-  if (count >= league.max_players) return res.status(400).json({ error: 'Ligue complete' });
+  // Vérifier si déjà membre
   const existing = await supabase.from('league_members').select('id').eq('league_id', league.id).eq('user_id', req.user.id).single();
   if (existing.data) return res.status(400).json({ error: 'Deja membre de cette ligue' });
+  // Vérifier la capacité (solo = créateur seulement, pas de nouveaux membres)
+  const { count } = await supabase.from('league_members').select('*', { count:'exact' }).eq('league_id', league.id);
+  if (league.max_players === 1) return res.status(400).json({ error: 'Ligue solo - aucun membre supplementaire permis' });
+  if (count >= league.max_players) return res.status(400).json({ error: 'Ligue complete' });
   await supabase.from('league_members').insert({ league_id: league.id, user_id: req.user.id, cash: league.capital_virtuel });
   res.json({ league });
 });
@@ -97,13 +100,11 @@ router.post('/join/:code', requireAuth, async (req, res) => {
     .select('*').eq('invite_code', req.params.code.toUpperCase()).single();
   if (!league) return res.status(404).json({ error: 'Code invalide' });
   if (league.status !== 'open') return res.status(400).json({ error: 'Ligue déjà commencée ou fermée' });
-
-  const { count } = await supabase.from('league_members').select('*', { count:'exact' }).eq('league_id', league.id);
-  if (count >= league.max_players) return res.status(400).json({ error: 'Ligue complète' });
-
   const existing = await supabase.from('league_members').select('id').eq('league_id', league.id).eq('user_id', req.user.id).single();
   if (existing.data) return res.status(400).json({ error: 'Déjà membre' });
-
+  if (league.max_players === 1) return res.status(400).json({ error: 'Ligue solo - aucun membre supplémentaire permis' });
+  const { count } = await supabase.from('league_members').select('*', { count:'exact' }).eq('league_id', league.id);
+  if (count >= league.max_players) return res.status(400).json({ error: 'Ligue complète' });
   await supabase.from('league_members').insert({ league_id: league.id, user_id: req.user.id, cash: league.capital_virtuel });
   res.json({ league });
 });
