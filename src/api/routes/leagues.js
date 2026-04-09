@@ -61,11 +61,14 @@ router.post('/', requireAuth, async (req, res) => {
     await supabase.from('league_invitations').upsert(invites, { onConflict: 'league_id,email' });
   }
 
-  // Initialiser les prix AMM pour cette ligue
+  // Initialiser les prix AMM avec les vrais prix du marché LNH
   const { data: teams } = await supabase.from('teams').select('id');
+  const { data: currentPrices } = await supabase.from('current_prices').select('team_id, price');
+  const currentPriceMap = Object.fromEntries((currentPrices || []).map(p => [p.team_id, parseFloat(p.price)]));
   const priceInserts = teams.map(t => ({
     league_id: league.id, team_id: t.id,
-    price: EMISSION_PRICE, amm_reserve: Math.floor(SHARES_PER_TEAM * AMM_RESERVE_PCT),
+    price: currentPriceMap[t.id] || EMISSION_PRICE,
+    amm_reserve: Math.floor(SHARES_PER_TEAM * AMM_RESERVE_PCT),
   }));
   await supabase.from('league_team_prices').insert(priceInserts);
 
@@ -207,8 +210,10 @@ router.post('/:id/market/buy', requireAuth, async (req, res) => {
   const { data: lp } = await supabase.from('league_team_prices').select('price, amm_reserve, amm_spread_pct').eq('league_id', leagueId).eq('team_id', teamId).single();
   const { data: league } = await supabase.from('leagues').select('amm_spread_pct, algo_config, capital_virtuel').eq('id', leagueId).single();
 
+  // Prix d'exécution = vrai prix du marché LNH (current_prices), pas le prix AMM de la ligue
+  const { data: marketPrice } = await supabase.from('current_prices').select('price').eq('team_id', teamId).single();
   const spread = ((lp?.amm_spread_pct || league?.amm_spread_pct || 2)) / 100;
-  const refPrice = lp?.price || EMISSION_PRICE;
+  const refPrice = parseFloat(marketPrice?.price || lp?.price || EMISSION_PRICE);
   const execPrice = orderType === 'limit' && limitPrice ? parseFloat(limitPrice) : parseFloat((refPrice * (1 + spread / 2)).toFixed(4));
   const cost = parseFloat((execPrice * qty).toFixed(4));
 
@@ -285,8 +290,11 @@ router.post('/:id/market/sell', requireAuth, async (req, res) => {
 
   const { data: lp } = await supabase.from('league_team_prices').select('price, amm_spread_pct').eq('league_id', leagueId).eq('team_id', teamId).single();
   const { data: league } = await supabase.from('leagues').select('amm_spread_pct').eq('id', leagueId).single();
+
+  // Prix d'exécution = vrai prix du marché LNH
+  const { data: marketPrice } = await supabase.from('current_prices').select('price').eq('team_id', teamId).single();
   const spread = ((lp?.amm_spread_pct || league?.amm_spread_pct || 2)) / 100;
-  const refPrice = lp?.price || EMISSION_PRICE;
+  const refPrice = parseFloat(marketPrice?.price || lp?.price || EMISSION_PRICE);
   const execPrice = orderType === 'limit' && limitPrice ? parseFloat(limitPrice) : parseFloat((refPrice * (1 - spread / 2)).toFixed(4));
   const proceeds = parseFloat((execPrice * qty).toFixed(4));
 
@@ -307,9 +315,17 @@ router.get('/:id/portfolio', requireAuth, async (req, res) => {
   const leagueId = req.params.id;
   const { data: member } = await supabase.from('league_members').select('cash').eq('league_id', leagueId).eq('user_id', req.user.id).single();
   const { data: holdings } = await supabase.from('league_holdings').select('*, teams(name,color)').eq('league_id', leagueId).eq('user_id', req.user.id).gt('shares', 0);
-  const { data: prices } = await supabase.from('league_team_prices').select('team_id, price').eq('league_id', leagueId);
-  const priceMap = Object.fromEntries((prices || []).map(p => [p.team_id, p.price]));
-  const positions = (holdings || []).map(h => ({ ...h, currentPrice: priceMap[h.team_id] || EMISSION_PRICE, value: h.shares * (priceMap[h.team_id] || EMISSION_PRICE) }));
+
+  // Utiliser les vrais prix du marché LNH pour valoriser les positions
+  const { data: marketPrices } = await supabase.from('current_prices').select('team_id, price');
+  const priceMap = Object.fromEntries((marketPrices || []).map(p => [p.team_id, parseFloat(p.price)]));
+
+  const positions = (holdings || []).map(h => {
+    const currentPrice = priceMap[h.team_id] || h.avg_cost || EMISSION_PRICE;
+    const value = h.shares * currentPrice;
+    const pnl = value - (h.shares * (h.avg_cost || currentPrice));
+    return { ...h, currentPrice, value, pnl };
+  });
   const stockVal = positions.reduce((s, p) => s + p.value, 0);
   res.json({ cash: member?.cash || 0, stockValue: stockVal, totalValue: (member?.cash || 0) + stockVal, positions });
 });
@@ -318,11 +334,14 @@ router.get('/:id/portfolio', requireAuth, async (req, res) => {
 router.get('/:id/leaderboard', async (req, res) => {
   const leagueId = req.params.id;
   const { data: members } = await supabase.from('league_members').select('user_id, cash, profiles(username, badge)').eq('league_id', leagueId);
-  const { data: prices } = await supabase.from('league_team_prices').select('team_id, price').eq('league_id', leagueId);
-  const priceMap = Object.fromEntries((prices || []).map(p => [p.team_id, p.price]));
+
+  // Vrais prix du marché LNH pour le classement
+  const { data: marketPrices } = await supabase.from('current_prices').select('team_id, price');
+  const priceMap = Object.fromEntries((marketPrices || []).map(p => [p.team_id, parseFloat(p.price)]));
+
   const ranked = await Promise.all((members || []).map(async m => {
-    const { data: hlds } = await supabase.from('league_holdings').select('shares, team_id').eq('league_id', leagueId).eq('user_id', m.user_id);
-    const stockVal = (hlds || []).reduce((s, h) => s + h.shares * (priceMap[h.team_id] || EMISSION_PRICE), 0);
+    const { data: hlds } = await supabase.from('league_holdings').select('shares, team_id, avg_cost').eq('league_id', leagueId).eq('user_id', m.user_id);
+    const stockVal = (hlds || []).reduce((s, h) => s + h.shares * (priceMap[h.team_id] || h.avg_cost || EMISSION_PRICE), 0);
     return { userId: m.user_id, username: m.profiles?.username, badge: m.profiles?.badge, cash: m.cash, stockValue: stockVal, netWorth: m.cash + stockVal };
   }));
   res.json(ranked.sort((a, b) => b.netWorth - a.netWorth));
