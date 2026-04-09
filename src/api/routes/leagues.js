@@ -414,4 +414,43 @@ router.get('/:id/dividends', requireAuth, async (req, res) => {
   res.json(data || []);
 });
 
+
+// ---- Exclure un participant (créateur seulement) ----
+router.delete('/:id/members/:userId', requireAuth, async (req, res) => {
+  const leagueId = req.params.id;
+  const targetUserId = req.params.userId;
+
+  // Vérifier que le demandeur est bien le créateur
+  const { data: league } = await supabase
+    .from('leagues').select('creator_id, status').eq('id', leagueId).single();
+  if (!league) return res.status(404).json({ error: 'Ligue introuvable' });
+  if (league.creator_id !== req.user.id)
+    return res.status(403).json({ error: 'Seul le créateur peut exclure un participant' });
+  if (targetUserId === req.user.id)
+    return res.status(400).json({ error: 'Vous ne pouvez pas vous exclure vous-même' });
+
+  // Rembourser le cash de départ (annuler les positions, remettre capital_virtuel)
+  // On récupère d'abord les holdings pour les remettre dans l'AMM
+  const { data: holdings } = await supabase
+    .from('league_holdings').select('team_id, shares')
+    .eq('league_id', leagueId).eq('user_id', targetUserId).gt('shares', 0);
+
+  // Remettre les actions dans la réserve AMM
+  for (const h of (holdings || [])) {
+    await supabase.from('league_team_prices')
+      .update({ amm_reserve: supabase.raw(`amm_reserve + ${h.shares}`) })
+      .eq('league_id', leagueId).eq('team_id', h.team_id);
+  }
+
+  // Supprimer holdings, ordres ouverts et membership
+  await supabase.from('league_holdings').delete()
+    .eq('league_id', leagueId).eq('user_id', targetUserId);
+  await supabase.from('league_orders').delete()
+    .eq('league_id', leagueId).eq('user_id', targetUserId);
+  await supabase.from('league_members').delete()
+    .eq('league_id', leagueId).eq('user_id', targetUserId);
+
+  res.json({ message: 'Participant exclu avec succès' });
+});
+
 module.exports = router;
