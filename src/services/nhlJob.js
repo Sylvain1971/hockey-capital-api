@@ -19,6 +19,9 @@ const {
 
 const processedGames = new Set();
 
+// Garde anti-spam standings : une seule execution par jour calendrier
+let lastStandingsDate = '';
+
 // â”€â”€ Config globale (chargÃ©e au dÃ©marrage et rechargÃ©e si besoin) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let seasonConfig = { mode: 'regular', playoff_round: null };
 
@@ -48,7 +51,9 @@ async function snapshotOpenPrice(teamId, currentPrice) {
   }
 }
 
-async function propagatePriceToLeagues(teamId, newPrice, pctChange) {
+async function propagatePriceToLeagues(teamId, newPrice, pctChange, triggerType = 'game_result') {
+  // Ne propager aux ligues QUE les impacts de matchs — pas les ajustements de classement
+  if (triggerType !== 'game_result' && triggerType !== 'clinch') return;
   try {
     const { data: leagues } = await supabase.from('leagues').select('id').eq('status', 'open');
     if (!leagues || leagues.length === 0) return;
@@ -161,6 +166,10 @@ async function processTeamGameResult(result, gameId, broadcast, game = null) {
 }
 
 async function processStandings(broadcast = null) {
+  // Garde : executer une seule fois par jour (les standings ne changent pas en 30s)
+  const todayStr = new Date().toISOString().split('T')[0];
+  if (lastStandingsDate === todayStr) return;
+
   let standings;
   try { standings = await withRetry(() => fetchStandings(), 'fetchStandings'); }
   catch (err) { console.error('[NHL] Erreur fetch standings après retries:', err.message); return; }
@@ -174,7 +183,7 @@ async function processStandings(broadcast = null) {
       if (adj.pctChange !== 0) {
         await updatePrice(team.teamId, adj.newPrice);
         await logPriceImpact(team.teamId, adj.log.trigger, adj.log.description, currentPrice, adj.newPrice);
-        await propagatePriceToLeagues(team.teamId, adj.newPrice, adj.pctChange);
+        await propagatePriceToLeagues(team.teamId, adj.newPrice, adj.pctChange, 'standings');
       }
       await updateNHLStats(team.teamId, { wins: team.wins, losses: team.losses, ot_losses: team.otLosses,
         points: team.points, games_played: team.gamesPlayed, division_rank: team.divisionRank,
