@@ -517,7 +517,7 @@ async function runJob(broadcast = null) {
   if (seasonConfig.mode === 'regular') {
     // Mode saison rÃ©guliÃ¨re â€” traitement normal + surveillance fin de saison
     await processScores(broadcast);
-    await processStandings(broadcast);
+    // processStandings retiré du cycle — ajustements classement trop fréquents
     await checkAutoBasculement(broadcast); // ðŸ” Surveille la fin de saison
   } else {
     // Mode sÃ©ries â€” traitement sÃ©ries + avancement de ronde automatique
