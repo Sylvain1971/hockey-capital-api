@@ -1,249 +1,184 @@
 'use strict';
-/**
- * RECALCUL COMPLET SAISON 2025-2026
- * Repart de $25.00 pour toutes les équipes le 8 octobre 2025
- * Retraite tous les matchs jusqu'à aujourd'hui
- * Recalcule les prix finaux + daily_open_prices
- */
 require('dotenv').config();
 const { createClient } = require('@supabase/supabase-js');
-
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
-const BASE_URL = 'https://api-web.nhle.com/v1';
-const PRIX_DEPART = 25.00;
-const SEASON_START = '2025-10-08';
 
-const ALGO = {
-  WIN_REG: 0.04, WIN_OT: 0.02, SHUTOUT_BONUS: 0.03,
-  LOSS_REG: 0.03, LOSS_OT: 0.01,
-  STREAK_MULT: [1.0, 1.0, 1.0, 1.5, 1.5, 2.0, 2.0, 3.0],
-  RANK_1_DAILY: 0.015 / 7,
-  RANK_23_DAILY: 0.005 / 7,
-  RANK_9_DAILY: -0.010 / 7,
-  PRICE_FLOOR: 0.50,
-};
+const BASE_URL='https://api-web.nhle.com/v1', PRIX_DEPART=25, PRICE_FLOOR=0.50;
+const SEASON_START='2025-10-08', SEASON_END='2026-04-18';
+const DELAY_MS=400; // 400ms entre chaque fetch → ~74 secondes pour 184 jours
 
-function streakMult(streak) {
-  if (streak >= 7) return 3.0;
-  if (streak >= 5) return 2.0;
-  if (streak >= 3) return 1.5;
-  return 1.0;
-}
+const ALGO={WIN_REG:0.03,WIN_OT:0.015,SHUTOUT:0.03,LOSS_REG:0.03,LOSS_OT:0.015,
+  CLINCH:0.12,REBOND:0.50,RIVALITE:0.005,SPRINT:1.20,CHUTE:1.30,DOMINANCE:0.01};
 
-function addDays(dateStr, n) {
-  const d = new Date(dateStr + 'T12:00:00Z');
-  d.setDate(d.getDate() + n);
-  return d.toISOString().split('T')[0];
-}
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+function streakMult(a){return a>=7?3:a>=5?2:a>=3?1.5:1;}
+function applyFloor(p){return Math.max(PRICE_FLOOR,parseFloat(p.toFixed(4)));}
+function addDays(d,n){const x=new Date(d+'T12:00:00Z');x.setDate(x.getDate()+n);return x.toISOString().split('T')[0];}
+function today(){return new Date().toISOString().split('T')[0];}
+function getDates(s,e){const r=[];let c=s;while(c<=e){r.push(c);c=addDays(c,1);}return r;}
+function isSprint(d){return d>=addDays(SEASON_END,-14)&&d<=SEASON_END;}
 
-function today() {
-  return new Date().toISOString().split('T')[0];
-}
-
-function getAllDates(start, end) {
-  const dates = [];
-  let cur = start;
-  while (cur <= end) {
-    dates.push(cur);
-    cur = addDays(cur, 1);
+async function fetchWithRetry(url,retries=3){
+  for(let i=0;i<retries;i++){
+    try{
+      const r=await fetch(url);
+      if(r.status===429){await sleep(3000+i*2000);continue;}
+      if(!r.ok)return null;
+      return await r.json();
+    }catch{await sleep(1000+i*1000);}
   }
-  return dates;
+  return null;
 }
 
-async function fetchGames(date) {
-  try {
-    const r = await fetch(`${BASE_URL}/score/${date}`);
-    if (!r.ok) return [];
-    const data = await r.json();
-    return (data.games || []).filter(g => g.gameState === 'OFF' || g.gameState === 'FINAL');
-  } catch { return []; }
+async function fetchGames(date){
+  const d=await fetchWithRetry(`${BASE_URL}/score/${date}`);
+  return (d?.games||[]).filter(g=>(g.gameState==='OFF'||g.gameState==='FINAL')&&g.gameType===2);
 }
 
-async function fetchStandings(date) {
-  try {
-    // L'API standings/now retourne le classement actuel
-    // Pour historique, on utilise standings par date si disponible
-    const r = await fetch(`${BASE_URL}/standings/${date}`);
-    if (!r.ok) return [];
-    const data = await r.json();
-    return data.standings || [];
-  } catch { return []; }
-}
-
-function parseGame(g) {
-  const homeAbbr = g.homeTeam?.abbrev;
-  const awayAbbr = g.awayTeam?.abbrev;
-  const homeGoals = g.homeTeam?.score ?? 0;
-  const awayGoals = g.awayTeam?.score ?? 0;
-  const periodType = g.periodDescriptor?.periodType;
-  const isOT = periodType === 'OT' || periodType === 'SO';
-  const homeWon = homeGoals > awayGoals;
-
-  return {
-    gameId: String(g.id),
-    home: {
-      teamId: homeAbbr,
-      won: homeWon,
-      overtime: isOT,
-      shutout: homeWon && awayGoals === 0,
-    },
-    away: {
-      teamId: awayAbbr,
-      won: !homeWon,
-      overtime: isOT,
-      shutout: !homeWon && homeGoals === 0,
-    },
-  };
-}
-
-async function main() {
-  console.log('=== RECALCUL SAISON 2025-2026 ===');
-  console.log(`Prix de départ: $${PRIX_DEPART} pour toutes les équipes`);
-  console.log(`Période: ${SEASON_START} → ${today()}`);
-  console.log('');
-
-  // 1. Charger toutes les équipes
-  const { data: teams } = await supabase.from('teams').select('id');
-  const teamIds = teams.map(t => t.id);
-  console.log(`${teamIds.length} équipes trouvées`);
-
-  // 2. État initial: tous à $25.00, streaks à 0
-  const prices = {};
-  const streaks = {};  // positif = win streak, négatif = loss streak
-  const clinchPaid = {};
-  const dailyOpen = {}; // date -> { teamId -> price }
-
-  for (const id of teamIds) {
-    prices[id] = PRIX_DEPART;
-    streaks[id] = 0;
-    clinchPaid[id] = false;
+async function fetchStandings(date){
+  const d=await fetchWithRetry(`${BASE_URL}/standings/${date}`);
+  const m={};
+  for(const s of(d?.standings||[])){
+    const a=s.teamAbbrev?.default;
+    if(a)m[a]={div:s.divisionName,rank:s.divisionSequence||99,clinched:['x','y','z'].includes(s.clinchIndicator)};
   }
+  return m;
+}
 
-  // 3. Vider les tables existantes
-  console.log('\nNettoyage des tables...');
-  await supabase.from('team_prices').delete().neq('team_id', 'XXXXXX');
-  await supabase.from('price_impact_log').delete().neq('team_id', 'XXXXXX');
-  console.log('Tables vidées');
+function calcImpact(side,streak,date){
+  const{won,overtime,shutout}=side;
+  let pct=0;const parts=[];
+  if(won){
+    const base=overtime?ALGO.WIN_OT:ALGO.WIN_REG;
+    const ns=streak>=0?streak+1:1, mult=streakMult(ns);
+    pct+=base*mult;
+    parts.push(overtime?`VicOT(x${mult})`:`Vic(x${mult})`);
+    if(shutout){pct+=ALGO.SHUTOUT;parts.push('Shutout');}
+    if(streak<=-5){pct*=(1+ALGO.REBOND);parts.push('REBOND!');}
+    if(ns>=7){pct+=ALGO.DOMINANCE;parts.push('Dominance');}
+  }else{
+    const base=overtime?ALGO.LOSS_OT:ALGO.LOSS_REG;
+    const ls=streak<=0?Math.abs(streak)+1:1;
+    let mult=streakMult(ls);
+    if(streak>=5){mult=ALGO.CHUTE;parts.push(`CHUTE!x1.3`);}
+    else if(ls>=3)parts.push(`SN${ls}(x${mult})`);
+    pct-=base*mult;
+    parts.push(overtime?'DefOT':'Def');
+  }
+  if(isSprint(date)){pct*=ALGO.SPRINT;parts.push('Sprint×1.2');}
+  return{pct,description:parts.join('+')};
+}
 
-  // 4. Insérer le prix de départ pour toutes les équipes (1er octobre comme référence)
-  const openPrices = teamIds.map(id => ({
-    team_id: id,
-    price: PRIX_DEPART,
-    volume_24h: 0,
-    recorded_at: '2025-10-07T23:59:00.000Z',
-  }));
-  await supabase.from('team_prices').insert(openPrices);
-  console.log(`Prix d'ouverture $${PRIX_DEPART} insérés pour toutes les équipes`);
+function updateStreak(s,won){return won?(s>=0?s+1:1):(s<=0?s-1:-1);}
 
-  // 5. Itérer sur chaque jour de la saison
-  const dates = getAllDates(SEASON_START, today());
-  console.log(`\nTraitement de ${dates.length} jours...`);
+async function main(){
+  console.log('=== RECALCUL v2.2 COMPLET (avec délai anti-rate-limit) ===');
+  const{data:teamsData}=await supabase.from('teams').select('id');
+  const teamIds=teamsData.map(t=>t.id);
+  console.log(`${teamIds.length} équipes | Délai: ${DELAY_MS}ms/jour\n`);
 
-  let totalGames = 0;
-  const impactLogs = [];
-  const priceRows = [];
+  const prices={},streaks={},clinched={};
+  for(const id of teamIds){prices[id]=PRIX_DEPART;streaks[id]=0;clinched[id]=false;}
 
-  for (const date of dates) {
-    const games = await fetchGames(date);
-    if (games.length === 0) continue;
+  // Nettoyage
+  console.log('Nettoyage...');
+  await supabase.from('price_impact_log').delete().neq('team_id','XXXXX');
+  await supabase.from('daily_open_prices').delete().neq('team_id','XXXXX');
+  let batch=true,totalDel=0;
+  while(batch){
+    const{data:rows}=await supabase.from('team_prices').select('id').limit(500);
+    if(!rows||rows.length===0){batch=false;break;}
+    await supabase.from('team_prices').delete().in('id',rows.map(r=>r.id));
+    totalDel+=rows.length;process.stdout.write(`\r  Supprimé ${totalDel}`);
+  }
+  await supabase.from('team_prices').insert(teamIds.map(id=>({team_id:id,price:PRIX_DEPART,volume_24h:0,recorded_at:'2025-10-07T23:59:00.000Z'})));
+  console.log('\nBase nettoyée ✓\n');
 
-    // Snapshot du prix d'ouverture du jour
-    dailyOpen[date] = {};
-    for (const id of teamIds) dailyOpen[date][id] = prices[id];
+  const dates=getDates(SEASON_START,today());
+  const priceRows=[],impactLogs=[],dailyOpenRows=[];
+  let totalGames=0,totalImpacts=0;
+  const stats={rebonds:0,rivalites:0,sprints:0,chutes:0,dominances:0};
+  let lastStandingsWeek='',standings={};
 
-    // Traiter chaque match
-    for (const g of games) {
-      const parsed = parseGame(g);
+  for(const date of dates){
+    await sleep(DELAY_MS); // ← délai crucial anti-rate-limit
+    const games=await fetchGames(date);
+    if(games.length===0)continue;
 
-      for (const side of [parsed.home, parsed.away]) {
-        const { teamId, won, overtime, shutout } = side;
-        if (!teamId || !prices[teamId]) continue;
+    for(const id of teamIds)dailyOpenRows.push({team_id:id,price:prices[id],date});
 
-        const oldPrice = prices[teamId];
-        const currentStreak = streaks[teamId];
-        const winStreak = Math.max(0, currentStreak);
-
-        // Calcul impact
-        let pct = 0;
-        if (won) {
-          const newStreak = winStreak + 1;
-          const base = overtime ? ALGO.WIN_OT : ALGO.WIN_REG;
-          pct += base * streakMult(newStreak);
-          if (shutout) pct += ALGO.SHUTOUT_BONUS;
-          streaks[teamId] = won ? Math.max(1, currentStreak) + (currentStreak > 0 ? 1 : 1) : 0;
-          streaks[teamId] = currentStreak >= 0 ? currentStreak + 1 : 1;
-        } else {
-          pct -= overtime ? ALGO.LOSS_OT : ALGO.LOSS_REG;
-          streaks[teamId] = currentStreak <= 0 ? currentStreak - 1 : -1;
-        }
-
-        const newPrice = Math.max(ALGO.PRICE_FLOOR, parseFloat((oldPrice * (1 + pct)).toFixed(4)));
-        prices[teamId] = newPrice;
-        const pctChange = parseFloat(((newPrice - oldPrice) / oldPrice * 100).toFixed(3));
-
-        priceRows.push({
-          team_id: teamId,
-          price: newPrice,
-          volume_24h: 0,
-          recorded_at: `${date}T22:00:00.000Z`,
-        });
-
-        impactLogs.push({
-          team_id: teamId,
-          trigger: 'game_result',
-          description: `${won ? (overtime ? 'Victoire OT/FP' : 'Victoire régulière') : (overtime ? 'Défaite OT/FP' : 'Défaite régulière')}${shutout && won ? ' + blanchissage' : ''} [${g.id}]`,
-          old_price: oldPrice,
-          new_price: newPrice,
-          pct_change: pctChange,
-          created_at: `${date}T22:00:00.000Z`,
-        });
-      }
-
-      totalGames++;
+    const week=date.substring(0,7);
+    if(week!==lastStandingsWeek){
+      await sleep(DELAY_MS);
+      standings=await fetchStandings(date);
+      lastStandingsWeek=week;
     }
 
-    process.stdout.write(`\r${date}: ${totalGames} matchs traités`);
-  }
+    for(const g of games){
+      const hA=g.homeTeam?.abbrev,aA=g.awayTeam?.abbrev;
+      const hG=g.homeTeam?.score??0,aG=g.awayTeam?.score??0;
+      const isOT=['OT','SO'].includes(g.periodDescriptor?.periodType);
+      const hW=hG>aG, ts=`${date}T22:00:00.000Z`;
 
+      for(const side of[
+        {teamId:hA,oppId:aA,won:hW, overtime:isOT,shutout:hW&&aG===0},
+        {teamId:aA,oppId:hA,won:!hW,overtime:isOT,shutout:!hW&&hG===0},
+      ]){
+        const{teamId,oppId,won}=side;
+        if(!teamId||prices[teamId]===undefined)continue;
+
+        if(won&&standings[teamId]?.clinched&&!clinched[teamId]){
+          const oP=prices[teamId],nP=applyFloor(oP*(1+ALGO.CLINCH));
+          prices[teamId]=nP;clinched[teamId]=true;
+          const pc=parseFloat(((nP-oP)/oP*100).toFixed(3));
+          priceRows.push({team_id:teamId,price:nP,volume_24h:0,recorded_at:ts});
+          impactLogs.push({team_id:teamId,trigger:'clinch',description:`Qualification+12%[${g.id}]`,old_price:oP,new_price:nP,pct_change:pc,created_at:ts});
+          totalImpacts++;
+        }
+
+        const oP=prices[teamId],streak=streaks[teamId];
+        const{pct,description}=calcImpact(side,streak,date);
+        const rivalite=(won&&standings[teamId]?.div&&standings[oppId]?.div&&standings[teamId].div===standings[oppId].div)?ALGO.RIVALITE:0;
+        const totalPct=pct+rivalite;
+        if(rivalite>0)stats.rivalites++;
+        if(description.includes('REBOND'))stats.rebonds++;
+        if(description.includes('Sprint'))stats.sprints++;
+        if(description.includes('CHUTE'))stats.chutes++;
+        if(description.includes('Dominance'))stats.dominances++;
+
+        const nP=applyFloor(oP*(1+totalPct));
+        prices[teamId]=nP;streaks[teamId]=updateStreak(streak,won);
+        const pc=parseFloat(((nP-oP)/oP*100).toFixed(3));
+        priceRows.push({team_id:teamId,price:nP,volume_24h:0,recorded_at:ts});
+        impactLogs.push({team_id:teamId,trigger:'game_result',description:`${description}${rivalite>0?'+Rivalité':''} [${g.id}]`,old_price:oP,new_price:nP,pct_change:pc,created_at:ts});
+        totalImpacts++;
+      }
+      totalGames++;
+    }
+    process.stdout.write(`\r${date} Matchs:${totalGames} Impacts:${totalImpacts} R:${stats.rebonds} V:${stats.rivalites} C:${stats.chutes}`);
+  }
   console.log('\n');
-  console.log(`Total matchs traités: ${totalGames}`);
 
-  // 6. Insérer en batch dans team_prices
-  console.log(`Insertion de ${priceRows.length} lignes de prix...`);
-  const chunkSize = 500;
-  for (let i = 0; i < priceRows.length; i += chunkSize) {
-    await supabase.from('team_prices').insert(priceRows.slice(i, i + chunkSize));
-    process.stdout.write(`\r  ${Math.min(i + chunkSize, priceRows.length)}/${priceRows.length}`);
+  const CHUNK=500;
+  console.log(`Insertion ${priceRows.length} prix...`);
+  for(let i=0;i<priceRows.length;i+=CHUNK){await supabase.from('team_prices').insert(priceRows.slice(i,i+CHUNK));process.stdout.write(`\r  ${Math.min(i+CHUNK,priceRows.length)}/${priceRows.length}`);}
+  console.log(`\nInsertion ${impactLogs.length} impacts...`);
+  for(let i=0;i<impactLogs.length;i+=CHUNK){await supabase.from('price_impact_log').insert(impactLogs.slice(i,i+CHUNK));process.stdout.write(`\r  ${Math.min(i+CHUNK,impactLogs.length)}/${impactLogs.length}`);}
+  console.log(`\nInsertion ${dailyOpenRows.length} daily_open...`);
+  for(let i=0;i<dailyOpenRows.length;i+=CHUNK){await supabase.from('daily_open_prices').insert(dailyOpenRows.slice(i,i+CHUNK));process.stdout.write(`\r  ${Math.min(i+CHUNK,dailyOpenRows.length)}/${dailyOpenRows.length}`);}
+
+  console.log('\nPrix finaux...');
+  const nowTs=new Date().toISOString();
+  for(const[id,p]of Object.entries(prices)){await supabase.from('team_prices').insert({team_id:id,price:p,volume_24h:0,recorded_at:nowTs});}
+
+  console.log('\n\n=== RÉSULTATS FINAUX v2.2 ===');
+  for(const[id,p]of Object.entries(prices).sort((a,b)=>b[1]-a[1])){
+    const pct=((p-PRIX_DEPART)/PRIX_DEPART*100).toFixed(1);
+    const s=streaks[id];const streak=s>0?`W${s}`:s<0?`L${Math.abs(s)}`:'—';
+    console.log(`${id.padEnd(4)} $${p.toFixed(2).padStart(8)} (${pct>=0?'+':''}${pct}%) ${streak}`);
   }
-
-  // 7. Insérer les impact logs
-  console.log(`\nInsertion de ${impactLogs.length} impact logs...`);
-  for (let i = 0; i < impactLogs.length; i += chunkSize) {
-    await supabase.from('price_impact_log').insert(impactLogs.slice(i, i + chunkSize));
-    process.stdout.write(`\r  ${Math.min(i + chunkSize, impactLogs.length)}/${impactLogs.length}`);
-  }
-
-  // 8. Mettre à jour current_prices (table de prix actuel)
-  console.log('\n\nMise à jour des prix finaux...');
-  for (const [teamId, price] of Object.entries(prices)) {
-    await supabase.from('team_prices').insert({
-      team_id: teamId,
-      price,
-      volume_24h: 0,
-      recorded_at: new Date().toISOString(),
-    });
-  }
-
-  // 9. Rapport final
-  console.log('\n=== RÉSULTATS FINAUX ===');
-  const sorted = Object.entries(prices).sort((a, b) => b[1] - a[1]);
-  for (const [id, price] of sorted) {
-    const pct = ((price - PRIX_DEPART) / PRIX_DEPART * 100).toFixed(1);
-    const bar = price > PRIX_DEPART ? '+' : '';
-    console.log(`${id.padEnd(4)} $${price.toFixed(2).padStart(6)} (${bar}${pct}% depuis oct. 2025)`);
-  }
-
-  console.log('\n✅ Recalcul terminé!');
+  console.log(`\nMatchs:${totalGames} | Impacts:${totalImpacts}`);
+  console.log(`Suspense → R:${stats.rebonds} V:${stats.rivalites} S:${stats.sprints} C:${stats.chutes} D:${stats.dominances}`);
+  console.log('\n✅ Recalcul v2.2 terminé!');
 }
-
-main().catch(console.error);
+main().catch(e=>{console.error('FATAL:',e.message);process.exit(1);});

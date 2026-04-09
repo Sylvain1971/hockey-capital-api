@@ -38,10 +38,17 @@ async function getAllPrices() {
 }
 
 async function updatePrice(teamId, newPrice, volume = 0) {
-  const { error } = await supabase
+  // 1. Historique des prix (série temporelle)
+  const { error: histErr } = await supabase
     .from('team_prices')
     .insert({ team_id: teamId, price: newPrice, volume_24h: volume });
-  if (error) throw error;
+  if (histErr) throw histErr;
+
+  // 2. Prix courant (lu par market.js, portfolio, leaderboard)
+  const { error: currErr } = await supabase
+    .from('current_prices')
+    .upsert({ team_id: teamId, price: newPrice, updated_at: new Date().toISOString() }, { onConflict: 'team_id' });
+  if (currErr) console.error('updatePrice current_prices error:', currErr.message);
 }
 
 async function logPriceImpact(teamId, trigger, description, oldPrice, newPrice) {
@@ -258,11 +265,20 @@ async function getLeaderboard(limit = 20) {
   const prices = await getAllPrices();
   const priceMap = Object.fromEntries(prices.map(p => [p.team_id, parseFloat(p.price)]));
 
-  const ranked = await Promise.all(profiles.map(async p => {
-    const { data: holdings } = await supabase.from('holdings').select('shares, team_id').eq('user_id', p.id);
-    const stockValue = (holdings || []).reduce((sum, h) => sum + h.shares * (priceMap[h.team_id] || 0), 0);
-    return { ...p, stockValue, netWorth: parseFloat(p.cash) + stockValue, teamsHeld: (holdings || []).filter(h => h.shares > 0).length };
-  }));
+  // Optimisation N+1 : tous les holdings en une seule requête
+  const { data: allHoldings } = await supabase
+    .from('holdings').select('user_id, team_id, shares').gt('shares', 0);
+  const holdingsByUser = {};
+  for (const h of (allHoldings || [])) {
+    if (!holdingsByUser[h.user_id]) holdingsByUser[h.user_id] = [];
+    holdingsByUser[h.user_id].push(h);
+  }
+
+  const ranked = (profiles || []).map(p => {
+    const holdings = holdingsByUser[p.id] || [];
+    const stockValue = holdings.reduce((sum, h) => sum + h.shares * (priceMap[h.team_id] || 0), 0);
+    return { ...p, stockValue, netWorth: parseFloat(p.cash) + stockValue, teamsHeld: holdings.filter(h => h.shares > 0).length };
+  });
 
   return ranked.sort((a, b) => b.netWorth - a.netWorth).slice(0, limit);
 }

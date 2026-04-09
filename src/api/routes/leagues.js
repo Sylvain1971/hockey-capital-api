@@ -1,4 +1,4 @@
-'use strict';
+﻿'use strict';
 /**
  * Hockey Capital — Routes ligues + AMM
  * Marché configuré par ligue, market maker automatique, prix à 5$/action
@@ -344,7 +344,9 @@ router.post('/:id/market/sell', requireAuth, async (req, res) => {
   await Promise.all([
     supabase.from('league_members').update({ cash: member.cash + proceeds }).eq('league_id', leagueId).eq('user_id', req.user.id),
     supabase.from('league_holdings').update({ shares: holding.shares - qty }).eq('league_id', leagueId).eq('user_id', req.user.id).eq('team_id', teamId),
-    supabase.from('league_team_prices').update({ amm_reserve: supabase.raw(`amm_reserve + ${qty}`) }).eq('league_id', leagueId).eq('team_id', teamId),
+    supabase.from('league_team_prices').select('amm_reserve').eq('league_id', leagueId).eq('team_id', teamId).single().then(({ data: lpSell }) =>
+      supabase.from('league_team_prices').update({ amm_reserve: (lpSell?.amm_reserve || 0) + qty }).eq('league_id', leagueId).eq('team_id', teamId)
+    ),
     supabase.from('league_trades').insert({ league_id:leagueId, seller_id:req.user.id, team_id:teamId, price:execPrice, qty }),
   ]);
 

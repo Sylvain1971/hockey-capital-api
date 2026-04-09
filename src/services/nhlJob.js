@@ -66,10 +66,22 @@ async function propagatePriceToLeagues(teamId, newPrice, pctChange) {
 
 // â”€â”€ SAISON RÃ‰GULIÃˆRE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+// ── Retry helper ─────────────────────────────────────────────────────────────
+async function withRetry(fn, label, retries = 3, delayMs = 2000) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try { return await fn(); }
+    catch (err) {
+      console.error(`[RETRY] ${label} — tentative ${attempt}/${retries}: ${err.message}`);
+      if (attempt < retries) await new Promise(r => setTimeout(r, delayMs * attempt));
+      else throw err;
+    }
+  }
+}
+
 async function processScores(broadcast = null) {
   let games;
-  try { games = await fetchScores(); }
-  catch (err) { console.error('[NHL] Erreur fetch scores:', err.message); return; }
+  try { games = await withRetry(() => fetchScores(), 'fetchScores'); }
+  catch (err) { console.error('[NHL] Erreur fetch scores après retries:', err.message); return; }
 
   for (const game of games) {
     if (!game.isFinal) continue;
@@ -95,9 +107,12 @@ async function processTeamGameResult(result, gameId, broadcast, game = null) {
   try {
     const stats        = await getNHLStats(teamId);
     const currentPrice = await getCurrentPrice(teamId);
+    // win_streak: positif = victoires consécutives, négatif = défaites consécutives
+    // C'est le streak AVANT ce match — passé tel quel à applyGameResult
     const currentStreak = stats.win_streak || 0;
-    const winStreak = won ? Math.max(0, currentStreak) + 1 : 0;
-    const newStreak = won ? winStreak : (Math.min(0, currentStreak) - 1);
+    const newStreak = won
+      ? (currentStreak >= 0 ? currentStreak + 1 : 1)   // reset positif si série de défaites
+      : (currentStreak <= 0 ? currentStreak - 1 : -1);  // reset négatif si série de victoires
 
     // Calcul sameDiv: adversaire dans la même division ?
     const opponentResult = game ? (game.homeResult?.teamId === teamId ? game.awayResult : game.homeResult) : null;
@@ -116,6 +131,7 @@ async function processTeamGameResult(result, gameId, broadcast, game = null) {
     const day   = now.getDate();
     const lateSeasonWeek = (month === 3 && day >= 20) || month === 4;
 
+    // winStreak passé = currentStreak (avant le match) — priceImpact calcule le nouveau streak en interne
     const impact = applyGameResult({ won, overtime, shutout, winStreak: currentStreak, sameDiv, lateSeasonWeek }, currentPrice);
     await updatePrice(teamId, impact.newPrice);
     await logPriceImpact(teamId, impact.log.trigger, `${impact.log.description} [${gameId}]`, currentPrice, impact.newPrice);
@@ -127,15 +143,16 @@ async function processTeamGameResult(result, gameId, broadcast, game = null) {
       last_game_was_shutout: shutout,
       games_played: (stats.games_played || 0) + 1,
     };
-    if (won)      statUpdate.wins = (stats.wins || 0) + 1;
+    if (won)           statUpdate.wins      = (stats.wins || 0) + 1;
     else if (overtime) statUpdate.ot_losses = (stats.ot_losses || 0) + 1;
-    else          statUpdate.losses = (stats.losses || 0) + 1;
+    else               statUpdate.losses    = (stats.losses || 0) + 1;
     await updateNHLStats(teamId, statUpdate);
 
     if (won && impact.dividend > 0) {
       try {
+        const streakMult = newStreak >= 7 ? 3 : newStreak >= 5 ? 2 : newStreak >= 3 ? 1.5 : 1;
         await payDividend({ teamId, amountPerShare: impact.dividend, reason: impact.log.description, gameId,
-          streakAtTime: winStreak, multiplier: winStreak >= 7 ? 3 : winStreak >= 5 ? 2 : winStreak >= 3 ? 1.5 : 1 });
+          streakAtTime: newStreak, multiplier: streakMult });
       } catch (e) { console.error(`[DIV] Erreur ${teamId}:`, e.message); }
     }
     if (broadcast) broadcast({ type: 'PRICE_UPDATE', teamId, newPrice: impact.newPrice, pctChange: impact.pctChange, reason: impact.log.description, dividend: impact.dividend });
@@ -145,8 +162,8 @@ async function processTeamGameResult(result, gameId, broadcast, game = null) {
 
 async function processStandings(broadcast = null) {
   let standings;
-  try { standings = await fetchStandings(); }
-  catch (err) { console.error('[NHL] Erreur fetch standings:', err.message); return; }
+  try { standings = await withRetry(() => fetchStandings(), 'fetchStandings'); }
+  catch (err) { console.error('[NHL] Erreur fetch standings après retries:', err.message); return; }
 
   for (const team of standings) {
     if (!team.teamId) continue;
@@ -185,8 +202,8 @@ async function processPlayoffScores(broadcast = null) {
   await loadSeasonConfig();
   const round = seasonConfig.playoff_round || 1;
   let games;
-  try { games = await fetchScores(); }
-  catch (err) { console.error('[PLAYOFFS] Erreur fetch scores:', err.message); return; }
+  try { games = await withRetry(() => fetchScores(), 'fetchScores-playoffs'); }
+  catch (err) { console.error('[PLAYOFFS] Erreur fetch scores après retries:', err.message); return; }
 
   for (const game of games) {
     if (!game.isFinal) continue;
@@ -259,7 +276,6 @@ async function processTeamPlayoffResult(result, game, round, teamData, broadcast
 
     for (const event of events) {
       let eventImpact;
-      const { detectUpset } = require('./priceImpact');
       const { coeff } = detectUpset(
         { season_pts: teamData.season_pts, conference_rank: teamData.conference_rank },
         { season_pts: opponentData.season_pts, conference_rank: opponentData.conference_rank }
@@ -315,18 +331,15 @@ async function checkAutoBasculement(broadcast = null) {
     const today = new Date().toISOString().split('T')[0];
 
     // VÃ©rifier s'il y a des matchs de sÃ©ries aujourd'hui (gameType 3)
-    const res = await fetch(`${BASE}/score/${today}`);
-    if (!res.ok) return;
-    const data = await res.json();
-    const games = data.games || [];
-
-    // Chercher aussi la veille (matchs tardifs)
+    // Fetch avec retry pour les deux dates
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
     const yStr = yesterday.toISOString().split('T')[0];
-    const resY = await fetch(`${BASE}/score/${yStr}`);
-    const dataY = resY.ok ? await resY.json() : { games: [] };
-    const allGames = [...games, ...(dataY.games || [])];
+    const [dataT, dataY] = await Promise.all([
+      withRetry(() => fetch(`${BASE}/score/${today}`).then(r => { if (!r.ok) throw new Error(`NHL ${r.status}`); return r.json(); }), 'check-today').catch(() => ({ games: [] })),
+      withRetry(() => fetch(`${BASE}/score/${yStr}`).then(r => { if (!r.ok) throw new Error(`NHL ${r.status}`); return r.json(); }), 'check-yesterday').catch(() => ({ games: [] })),
+    ]);
+    const allGames = [...(dataT.games || []), ...(dataY.games || [])];
 
     // Un match de sÃ©ries est gameType === 3
     const hasPlayoffGame = allGames.some(g => g.gameType === 3);
@@ -440,6 +453,8 @@ async function executerBasculementAuto(broadcast = null) {
  * Utilise l'endpoint playoff/bracket de l'API NHL.
  */
 async function checkRondeAvancement(broadcast = null) {
+  // Re-lire la config depuis la DB pour eviter les race conditions entre cycles
+  await loadSeasonConfig();
   const round = seasonConfig.playoff_round || 1;
   if (round >= 4) return; // Finale Stanley â€” pas d'avancement possible
 
