@@ -344,15 +344,29 @@ router.get('/:id/portfolio', requireAuth, async (req, res) => {
   const { data: member } = await supabase.from('league_members').select('cash').eq('league_id', leagueId).eq('user_id', req.user.id).single();
   const { data: holdings } = await supabase.from('league_holdings').select('*, teams(name,color)').eq('league_id', leagueId).eq('user_id', req.user.id).gt('shares', 0);
 
-  // Utiliser les vrais prix du marché LNH pour valoriser les positions
+  // Prix actuels du marché LNH
   const { data: marketPrices } = await supabase.from('current_prices').select('team_id, price');
   const priceMap = Object.fromEntries((marketPrices || []).map(p => [p.team_id, parseFloat(p.price)]));
+
+  // Prix d'ouverture du jour pour calculer la variation journalière
+  const today = new Date().toISOString().split('T')[0];
+  const { data: openPrices } = await supabase.from('daily_open_prices').select('team_id, price').eq('date', today);
+  const openMap = Object.fromEntries((openPrices || []).map(p => [p.team_id, parseFloat(p.price)]));
 
   const positions = (holdings || []).map(h => {
     const currentPrice = priceMap[h.team_id] || h.avg_cost || EMISSION_PRICE;
     const value = h.shares * currentPrice;
-    const pnl = value - (h.shares * (h.avg_cost || currentPrice));
-    return { ...h, currentPrice, value, pnl };
+
+    // P&L du jour = variation depuis l'ouverture (pas depuis l'achat)
+    // Si pas de prix d'ouverture (acheté aujourd'hui), P&L = 0
+    const openPrice = openMap[h.team_id];
+    const pnl = openPrice ? (currentPrice - openPrice) * h.shares : 0;
+    const pnlPct = openPrice && openPrice > 0 ? ((currentPrice - openPrice) / openPrice * 100) : 0;
+
+    // P&L total depuis l'achat (pour info)
+    const pnlTotal = value - (h.shares * (h.avg_cost || currentPrice));
+
+    return { ...h, currentPrice, value, pnl, pnlPct, pnlTotal };
   });
   const stockVal = positions.reduce((s, p) => s + p.value, 0);
   res.json({ cash: member?.cash || 0, stockValue: stockVal, totalValue: (member?.cash || 0) + stockVal, positions });
