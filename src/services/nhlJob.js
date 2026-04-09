@@ -85,12 +85,12 @@ async function processScores(broadcast = null) {
 
     for (const result of [game.homeResult, game.awayResult]) {
       if (!result?.teamId) continue;
-      await processTeamGameResult(result, game.gameId, broadcast);
+      await processTeamGameResult(result, game.gameId, broadcast, game);
     }
   }
 }
 
-async function processTeamGameResult(result, gameId, broadcast) {
+async function processTeamGameResult(result, gameId, broadcast, game = null) {
   const { teamId, won, overtime, shutout } = result;
   try {
     const stats        = await getNHLStats(teamId);
@@ -99,7 +99,24 @@ async function processTeamGameResult(result, gameId, broadcast) {
     const winStreak = won ? Math.max(0, currentStreak) + 1 : 0;
     const newStreak = won ? winStreak : (Math.min(0, currentStreak) - 1);
 
-    const impact = applyGameResult({ won, overtime, shutout, winStreak: Math.max(0, currentStreak) }, currentPrice);
+    // Calcul sameDiv: adversaire dans la même division ?
+    const opponentResult = game ? (game.homeResult?.teamId === teamId ? game.awayResult : game.homeResult) : null;
+    const opponentId = opponentResult?.teamId;
+    let sameDiv = false;
+    if (opponentId) {
+      const { data: myTeam }  = await supabase.from('teams').select('division').eq('id', teamId).single().catch(() => ({ data: null }));
+      const { data: oppTeam } = await supabase.from('teams').select('division').eq('id', opponentId).single().catch(() => ({ data: null }));
+      if (myTeam?.division && oppTeam?.division) sameDiv = myTeam.division === oppTeam.division;
+    }
+
+    // Calcul lateSeasonWeek: dans les 2 dernières semaines de saison régulière ?
+    // La saison se termine début avril — les 2 dernières semaines = après le 20 mars environ
+    const now = new Date();
+    const month = now.getMonth() + 1; // 1-12
+    const day   = now.getDate();
+    const lateSeasonWeek = (month === 3 && day >= 20) || month === 4;
+
+    const impact = applyGameResult({ won, overtime, shutout, winStreak: currentStreak, sameDiv, lateSeasonWeek }, currentPrice);
     await updatePrice(teamId, impact.newPrice);
     await logPriceImpact(teamId, impact.log.trigger, `${impact.log.description} [${gameId}]`, currentPrice, impact.newPrice);
     await propagatePriceToLeagues(teamId, impact.newPrice, impact.pctChange);

@@ -27,8 +27,12 @@ const REGULAR = {
   RANK_9_WEEKLY:  0.010,
   DIVIDEND_BASE:  0.08,
   CLINCH_BONUS:   0.12,
-  ELIM_PENALTY:   0.15,
-  PRICE_FLOOR:    0.50,
+  ELIM_PENALTY:        0.15,
+  PRICE_FLOOR:         0.50,
+  // Règles de suspense v2.2
+  DIV_RIVALRY_BONUS:   0.005, // +0.5% victoire même division
+  LATE_SEASON_MULT:    1.2,   // ×1.2 deux dernières semaines
+  STREAK_BREAK_MULT:   1.3,   // ×1.3 défaite après 5+ victoires
 };
 
 // ── Constantes séries éliminatoires ──────────────────────────────────────────
@@ -90,82 +94,121 @@ function detectUpset(thisTeam, opponent) {
 // ── STRATÉGIE SAISON RÉGULIÈRE ────────────────────────────────────────────────
 
 /**
- * Impact d'un résultat de match — saison régulière v2.1 (symétrique)
+ * Impact d'un résultat de match — saison régulière v2.2
  *
- * Symétrie garantie par match :
- *   Victoire +3% × mult_streak_victoire
- *   Défaite  -3% × mult_streak_defaite
- *   → somme nette = 0 (avant blanchissage)
+ * Règles de base (symétriques) :
+ *   Victoire +3% / Défaite -3%  → somme = 0 par match ✓
+ *   Victoire OT +1.5% / Défaite OT -1.5% → somme = 0 ✓
+ *   Blanchissage +3% bonus conservé
+ *   Streak multiplier sur victoires ET défaites consécutives
  *
- * Le streak multiplier amplifie maintenant les deux directions :
- *   3+ victoires consécutives → ×1.5 sur la victoire
- *   3+ défaites consécutives  → ×1.5 sur la défaite (punition accrue)
+ * Règles de suspense v2.2 :
+ *   1. Momentum inversé  — sortir d'une série de 5+ défaites avec une victoire → ×1.5 bonus rebond
+ *   2. Rivalité division — victoire contre équipe même division → +0.5% bonus
+ *   3. Fin de saison     — 2 dernières semaines → ×1.2 sur toute la variation
+ *   4. Streak brisé      — perdre après 5+ victoires → ×1.3 sur la défaite (chute dramatique)
  *
  * @param {object} gameResult
- *   { won, overtime, shutout, winStreak }
- *   winStreak: positif = streak de victoires, négatif = streak de défaites
+ *   { won, overtime, shutout, winStreak, sameDiv, lateSeasonWeek }
+ *   winStreak: positif = victoires consécutives, négatif = défaites consécutives
+ *   sameDiv: boolean — adversaire dans la même division
+ *   lateSeasonWeek: boolean — dans les 2 dernières semaines de saison
  */
 function applyGameResult(gameResult, currentPrice) {
-  const { won, overtime, shutout, winStreak = 0 } = gameResult;
+  const { won, overtime, shutout, winStreak = 0, sameDiv = false, lateSeasonWeek = false } = gameResult;
   let totalPct = 0;
   const breakdown = [];
+  const suspense = []; // log des règles de suspense déclenchées
 
   if (won) {
     const baseWinPct = overtime ? REGULAR.WIN_OT : REGULAR.WIN_REG;
-    const newStreak  = winStreak >= 0 ? winStreak + 1 : 1; // repart à 1 si sortait de streak négatif
-    const mult       = streakMultiplier(newStreak);
+    const newStreak  = winStreak >= 0 ? winStreak + 1 : 1;
+    let mult = streakMultiplier(newStreak);
+
+    // Règle 1 : Momentum inversé — sortir de 5+ défaites avec une victoire
+    const momentumInverse = winStreak <= -5;
+    if (momentumInverse) {
+      mult = mult * 1.5;
+      suspense.push('Momentum inverse (+50% rebond)');
+      breakdown.push({ rule: 'Momentum inverse (rebond)', basePct: 0, multiplier: 1.5, effectivePct: 0, positive: true });
+    }
+
     const effectivePct = baseWinPct * mult;
     totalPct += effectivePct;
     breakdown.push({
-      rule: overtime ? 'Victoire OT/FP' : 'Victoire régulière',
+      rule: overtime ? 'Victoire OT/FP' : 'Victoire reguliere',
       basePct: baseWinPct, multiplier: mult, effectivePct, positive: true,
     });
+
+    // Blanchissage
     if (shutout) {
       totalPct += REGULAR.SHUTOUT_BONUS;
       breakdown.push({ rule: 'Bonus blanchissage', basePct: REGULAR.SHUTOUT_BONUS, multiplier: 1, effectivePct: REGULAR.SHUTOUT_BONUS, positive: true });
     }
+
+    // Règle 2 : Rivalité de division
+    if (sameDiv) {
+      totalPct += REGULAR.DIV_RIVALRY_BONUS;
+      suspense.push('Rivalite division (+0.5%)');
+      breakdown.push({ rule: 'Rivalite de division', basePct: REGULAR.DIV_RIVALRY_BONUS, multiplier: 1, effectivePct: REGULAR.DIV_RIVALRY_BONUS, positive: true });
+    }
+
   } else {
     const baseLossPct = overtime ? REGULAR.LOSS_OT : REGULAR.LOSS_REG;
-    // Streak de défaites : winStreak négatif → amplifie la punition
     const lossStreak  = winStreak <= 0 ? Math.abs(winStreak) + 1 : 1;
-    const mult        = streakMultiplier(lossStreak);
+    let mult = streakMultiplier(lossStreak);
+
+    // Règle 4 : Streak brisé — perdre après 5+ victoires
+    const streakBrise = winStreak >= 5;
+    if (streakBrise) {
+      mult = mult * REGULAR.STREAK_BREAK_MULT;
+      suspense.push('Streak brise (x1.3 chute)');
+      breakdown.push({ rule: 'Streak brise (chute)', basePct: 0, multiplier: REGULAR.STREAK_BREAK_MULT, effectivePct: 0, positive: false });
+    }
+
     const effectivePct = baseLossPct * mult;
     totalPct -= effectivePct;
     breakdown.push({
-      rule: overtime ? 'Défaite OT/FP' : 'Défaite régulière',
+      rule: overtime ? 'Defaite OT/FP' : 'Defaite reguliere',
       basePct: baseLossPct, multiplier: mult, effectivePct, positive: false,
     });
+  }
+
+  // Règle 3 : Fin de saison — ×1.2 sur toute la variation
+  if (lateSeasonWeek && totalPct !== 0) {
+    totalPct = totalPct * REGULAR.LATE_SEASON_MULT;
+    suspense.push('Fin de saison (x1.2)');
+    breakdown.push({ rule: 'Fin de saison (course aux series)', basePct: 0, multiplier: REGULAR.LATE_SEASON_MULT, effectivePct: 0, positive: totalPct > 0 });
   }
 
   const newPrice  = applyFloor(currentPrice * (1 + totalPct));
   const pctChange = pct(newPrice, currentPrice);
 
-  // Streak mis à jour pour le log
   const newStreak = won
     ? (winStreak >= 0 ? winStreak + 1 : 1)
     : (winStreak <= 0 ? winStreak - 1 : -1);
 
-  // Dividende uniquement sur les victoires (streak positif)
   const divMult  = won ? streakMultiplier(Math.max(1, newStreak)) : 0;
   const dividend = won ? parseFloat((REGULAR.DIVIDEND_BASE * divMult).toFixed(4)) : 0;
 
   return {
-    newPrice, pctChange, dividend, breakdown,
-    log: { trigger: 'game_result', description: _descRegular(gameResult, newStreak, pctChange), pctChange },
+    newPrice, pctChange, dividend, breakdown, suspense,
+    log: { trigger: 'game_result', description: _descRegular(gameResult, newStreak, pctChange, suspense), pctChange },
   };
 }
 
-function _descRegular(g, newStreak, pctChange) {
+function _descRegular(g, newStreak, pctChange, suspense = []) {
   const parts = [];
   if (g.won) {
-    parts.push(g.overtime ? 'Victoire OT/FP' : 'Victoire régulière');
+    parts.push(g.overtime ? 'Victoire OT/FP' : 'Victoire reguliere');
     if (g.shutout) parts.push('blanchissage');
     if (newStreak >= 3) parts.push(`streak ${newStreak} (x${streakMultiplier(newStreak).toFixed(1)})`);
   } else {
     parts.push(g.overtime ? 'Defaite OT/FP' : 'Defaite reguliere');
     if (Math.abs(newStreak) >= 3) parts.push(`serie noire ${Math.abs(newStreak)} (x${streakMultiplier(Math.abs(newStreak)).toFixed(1)})`);
   }
-  return `${parts.join(' + ')} — ${pctChange >= 0 ? '+' : ''}${pctChange}%`;
+  const sus = suspense.length ? ` [${suspense.join(', ')}]` : '';
+  return `${parts.join(' + ')} — ${pctChange >= 0 ? '+' : ''}${pctChange}%${sus}`;
 }
 
 function applyStandingsAdjustment(divisionRank, currentPrice, daily = true) {
