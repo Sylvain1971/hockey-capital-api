@@ -14,34 +14,14 @@ router.get('/teams', async (req, res) => {
     const { data: stats }  = await supabase.from('nhl_team_stats').select('*');
     const prices = await getAllPrices();
 
-    // Prix de référence = premier enregistrement de la journée (minuit UTC)
-    const todayMidnightUTC = new Date();
-    todayMidnightUTC.setUTCHours(0, 0, 0, 0); // minuit UTC, pas heure locale
+    // Prix d'ouverture du jour depuis daily_open_prices (table dédiée, fiable)
+    const today = new Date().toISOString().split('T')[0];
+    const { data: openPrices } = await supabase
+      .from('daily_open_prices')
+      .select('team_id, price')
+      .eq('date', today);
 
-    // Dernier prix avant minuit UTC (clôture d'hier)
-    const { data: prevPricesHier } = await supabase
-      .from('team_prices')
-      .select('team_id, price, recorded_at')
-      .lt('recorded_at', todayMidnightUTC.toISOString())
-      .order('recorded_at', { ascending: false })
-      .limit(64);
-
-    // Premier prix après minuit UTC (ouverture d'aujourd'hui)
-    const { data: firstPricesAujourdhui } = await supabase
-      .from('team_prices')
-      .select('team_id, price, recorded_at')
-      .gte('recorded_at', todayMidnightUTC.toISOString())
-      .order('recorded_at', { ascending: true })
-      .limit(64);
-
-    // Priorité: clôture d'hier → sinon premier prix du jour
-    const prevMap = {};
-    for (const p of prevPricesHier || []) {
-      if (!prevMap[p.team_id]) prevMap[p.team_id] = parseFloat(p.price);
-    }
-    for (const p of firstPricesAujourdhui || []) {
-      if (!prevMap[p.team_id]) prevMap[p.team_id] = parseFloat(p.price);
-    }
+    const prevMap = Object.fromEntries((openPrices || []).map(p => [p.team_id, parseFloat(p.price)]));
 
     const priceMap  = Object.fromEntries(prices.map(p => [p.team_id, p]));
     const supplyMap = Object.fromEntries(supply.map(s => [s.team_id, s.available]));

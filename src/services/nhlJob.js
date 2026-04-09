@@ -63,21 +63,21 @@ async function processScores(broadcast = null) {
  * Permet de calculer la vraie variation journalière
  */
 async function snapshotOpenPrice(teamId, currentPrice) {
-  const todayMidnightUTC = new Date();
-  todayMidnightUTC.setUTCHours(0, 0, 0, 0); // minuit UTC
+  const today = new Date().toISOString().split('T')[0]; // date UTC ex: "2026-04-09"
 
+  // Insérer le prix d'ouverture du jour si pas encore fait
   const { data } = await supabase
-    .from('team_prices')
-    .select('id')
+    .from('daily_open_prices')
+    .select('team_id')
     .eq('team_id', teamId)
-    .gte('recorded_at', todayMidnightUTC.toISOString())
+    .eq('date', today)
     .limit(1);
 
   if (!data || data.length === 0) {
-    await supabase.from('team_prices').insert({
+    await supabase.from('daily_open_prices').insert({
       team_id: teamId,
       price: currentPrice,
-      volume_24h: 0,
+      date: today,
     });
   }
 }
