@@ -95,7 +95,7 @@ async function processScores(broadcast = null) {
 
     for (const result of [game.homeResult, game.awayResult]) {
       if (!result?.teamId) continue;
-      const { data: cp } = await supabase.from('current_prices').select('price').eq('team_id', result.teamId).single().catch(() => ({ data: null }));
+      const { data: cp } = await supabase.from('current_prices').select('price').eq('team_id', result.teamId).single().then(r => ({data: r.data})).catch(() => ({ data: null }));
       if (cp) await snapshotOpenPrice(result.teamId, parseFloat(cp.price));
     }
     processedGames.add(game.gameId);
@@ -124,8 +124,8 @@ async function processTeamGameResult(result, gameId, broadcast, game = null) {
     const opponentId = opponentResult?.teamId;
     let sameDiv = false;
     if (opponentId) {
-      const { data: myTeam }  = await supabase.from('teams').select('division').eq('id', teamId).single().catch(() => ({ data: null }));
-      const { data: oppTeam } = await supabase.from('teams').select('division').eq('id', opponentId).single().catch(() => ({ data: null }));
+      const { data: myTeam }  = await supabase.from('teams').select('division').eq('id', teamId).single().then(r => ({data: r.data})).catch(() => ({ data: null }));
+      const { data: oppTeam } = await supabase.from('teams').select('division').eq('id', opponentId).single().then(r => ({data: r.data})).catch(() => ({ data: null }));
       if (myTeam?.division && oppTeam?.division) sameDiv = myTeam.division === oppTeam.division;
     }
 

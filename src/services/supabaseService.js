@@ -47,7 +47,7 @@ async function updatePrice(teamId, newPrice, volume = 0) {
   // 2. Prix courant (lu par market.js, portfolio, leaderboard)
   const { error: currErr } = await supabase
     .from('current_prices')
-    .upsert({ team_id: teamId, price: newPrice, updated_at: new Date().toISOString() }, { onConflict: 'team_id' });
+    .upsert({ team_id: teamId, price: newPrice }, { onConflict: 'team_id' });
   if (currErr) console.error('updatePrice current_prices error:', currErr.message);
 }
 
